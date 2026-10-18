@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:exploraec/bienvenida_claude_design.dart';
+import 'package:exploraec/controllers/places_controller.dart';
 import 'package:exploraec/main.dart';
 import 'package:exploraec/models/place.dart';
 import 'package:exploraec/screens/add_place_screen.dart';
@@ -36,6 +38,29 @@ Future<void> _esperarCarga(WidgetTester tester) async {
   await tester.pumpAndSettle();
   expect(find.byType(LoadingView), findsNothing);
 }
+
+// Avisos de GetX (Get.snackbar): duran 3 s y luego animan su salida.
+const _duracionAviso = Duration(seconds: 3);
+
+/// Espera a que el aviso visible termine y se cierre. Necesario porque la
+/// cola de avisos de GetX es estática: Get.reset() no la vacía, y un aviso
+/// abierto que pase a la prueba siguiente hace que Get.back() cierre ese
+/// aviso en vez de la pantalla.
+Future<void> _esperarCierreDeAviso(WidgetTester tester) async {
+  await tester.pump(_duracionAviso);
+  await tester.pumpAndSettle();
+  expect(Get.isSnackbarOpen, isFalse,
+      reason: 'Quedó otro aviso abierto o en cola');
+}
+
+/// El mensaje de error dentro de ErrorView (el aviso también lo muestra).
+Finder _mensajeEnErrorView() => find.descendant(
+      of: find.byType(ErrorView),
+      matching: find.textContaining(_mensajeError),
+    );
+
+/// El PlacesController que registró PlacesBinding al montar la app.
+PlacesController _controller() => Get.find<PlacesController>();
 
 /// Monta la app y espera a que Inicio termine la primera carga.
 Future<void> _abrirAppCargada(WidgetTester tester) async {
@@ -92,12 +117,23 @@ void main() {
     // Evita descargar fuentes por internet durante las pruebas;
     // se usa la fuente de respaldo del entorno de test.
     GoogleFonts.config.allowRuntimeFetching = false;
+    // Silencia los registros [GETX] en la salida de las pruebas.
+    Get.isLogEnable = false;
   });
 
-  // lugaresEjemplo es una lista global en memoria: se restaura tras cada
-  // prueba para que agregar lugares no afecte a las demás.
+  // Dos estados globales que sobreviven entre pruebas y se limpian tras
+  // cada una:
+  // - lugaresEjemplo, la lista en memoria (agregar lugares la modifica);
+  // - el registro de GetX: sin Get.reset() la siguiente prueba recibiría
+  //   el PlacesController anterior, ya cargado y con sus modos simulados.
   final lugaresOriginales = List<Place>.of(lugaresEjemplo);
   tearDown(() {
+    Get.reset();
+    // El idioma y el diccionario de GetX también son estáticos y Get.reset()
+    // no los toca: se dejan como antes de la prueba.
+    Get.locale = null;
+    Get.fallbackLocale = null;
+    Get.clearTranslations();
     lugaresEjemplo
       ..clear()
       ..addAll(lugaresOriginales);
@@ -174,8 +210,8 @@ void main() {
   ) async {
     await _abrirAppCargada(tester);
 
-    // Solo pump(): al volver a Inicio, HomeScreen se crea de nuevo y
-    // empieza otra carga (con animación infinita).
+    // Solo pump(): así se puede comprobar el primer frame de cada pestaña
+    // (por ejemplo, que Inicio no pase por el estado de carga al volver).
     Future<void> tocarPestana(String etiqueta) async {
       await tester.tap(
         find.descendant(
@@ -203,15 +239,59 @@ void main() {
     await tocarPestana('Favoritos');
     expect(find.byType(FavoritesPlaceholderScreen), findsOneWidget);
     expect(find.byType(MapPlaceholderScreen), findsNothing);
-    expect(find.text('Próximamente: favoritos (Sesión 7)'), findsOneWidget);
+    // Desde la Sesión 4 Favoritos lee el contador del controller compartido.
+    expect(find.textContaining('Favoritos marcados: 0.'), findsOneWidget);
     expect(indiceActual(), 2);
 
     await tocarPestana('Inicio');
     expect(find.byType(HomeScreen), findsOneWidget);
-    await _esperarCarga(tester);
+    // El estado vive en PlacesController, no en HomeScreen: al volver no
+    // hay una carga nueva, los datos ya están.
+    expect(find.byType(LoadingView), findsNothing);
     expect(find.byType(FavoritesPlaceholderScreen), findsNothing);
     expect(find.text(lugaresEjemplo.first.nombre), findsOneWidget);
     expect(indiceActual(), 0);
+  });
+
+  testWidgets('Cambiar de pestaña conserva el controller y sus datos', (
+    WidgetTester tester,
+  ) async {
+    await _abrirAppCargada(tester);
+    final controller = _controller();
+
+    // Se deja Inicio en un estado distinto al inicial: modo vacío.
+    await _simular(tester, 'Simular: vacío');
+    await _esperarCarga(tester);
+    expect(find.byType(EmptyView), findsOneWidget);
+
+    Future<void> tocarPestana(String etiqueta) async {
+      await tester.tap(
+        find.descendant(
+          of: find.byType(BottomNavigationBar),
+          matching: find.text(etiqueta),
+        ),
+      );
+      await tester.pump();
+    }
+
+    await tocarPestana('Mapa');
+    expect(find.byType(HomeScreen), findsNothing);
+    await tocarPestana('Favoritos');
+    expect(find.byType(HomeScreen), findsNothing);
+    await tocarPestana('Inicio');
+
+    // Misma instancia, mismo estado: sigue vacío y sin recargar.
+    expect(identical(_controller(), controller), isTrue);
+    expect(controller.estado.value, EstadoCarga.exito);
+    expect(controller.lugares, isEmpty);
+    expect(find.byType(LoadingView), findsNothing);
+    expect(find.byType(EmptyView), findsOneWidget);
+
+    // Y al volver al modo normal, la lista regresa.
+    await _simular(tester, 'Simular: normal');
+    await _esperarCarga(tester);
+    expect(find.byType(PlaceCard), findsWidgets);
+    expect(controller.lugares.length, lugaresEjemplo.length);
   });
 
   group('Estados de carga de Inicio', () {
@@ -254,15 +334,18 @@ void main() {
       await _simular(tester, 'Simular: error');
       await _esperarCarga(tester);
       expect(find.byType(ErrorView), findsOneWidget);
-      expect(find.textContaining(_mensajeError), findsOneWidget);
+      expect(_mensajeEnErrorView(), findsOneWidget);
       expect(find.byType(PlaceCard), findsNothing);
+
+      await _esperarCierreDeAviso(tester);
 
       // El modo error sigue activo: reintentar vuelve a cargar y vuelve a fallar.
       await tester.tap(find.text('Reintentar'));
       await tester.pump();
       await _esperarCarga(tester);
       expect(find.byType(ErrorView), findsOneWidget);
-      expect(find.textContaining(_mensajeError), findsOneWidget);
+      expect(_mensajeEnErrorView(), findsOneWidget);
+      await _esperarCierreDeAviso(tester);
     });
 
     testWidgets('Tras un error, Simular normal recupera la lista', (
@@ -272,6 +355,9 @@ void main() {
       await _simular(tester, 'Simular: error');
       await _esperarCarga(tester);
       expect(find.byType(ErrorView), findsOneWidget);
+      // El aviso de error se muestra arriba, sobre la AppBar: se espera a
+      // que se cierre antes de abrir el menú.
+      await _esperarCierreDeAviso(tester);
 
       await _simular(tester, 'Simular: normal');
       await _esperarCarga(tester);
@@ -398,14 +484,25 @@ void main() {
       expect(find.bySemanticsLabel(lugar.categoria), findsNothing);
       expect(find.bySemanticsLabel(etiqueta(lugar)), findsOneWidget);
 
-      // El nodo de la tarjeta no tiene hijos que repitan el contenido.
+      // Ningún nodo hijo de la tarjeta repite su contenido. Desde la
+      // Sesión 4 el único hijo es el botón de favorito (corazón), que se
+      // anuncia por su tooltip, no por los textos de la tarjeta.
       final nodo = tester.getSemantics(find.bySemanticsLabel(etiqueta(lugar)));
-      final etiquetasHijas = <String>[];
+      final hijos = <SemanticsData>[];
       nodo.visitChildren((hijo) {
-        etiquetasHijas.add(hijo.label);
+        hijos.add(hijo.getSemanticsData());
         return true;
       });
-      expect(etiquetasHijas, isEmpty);
+      for (final hijo in hijos) {
+        final anunciado = '${hijo.label} ${hijo.value} ${hijo.tooltip}';
+        for (final texto in [lugar.nombre, lugar.categoria, lugar.descripcion]) {
+          expect(anunciado.contains(texto), isFalse,
+              reason: 'Un hijo de la tarjeta repite "$texto"');
+        }
+      }
+      expect(hijos, hasLength(1));
+      expect(hijos.single.tooltip, 'Agregar a favoritos');
+      expect(hijos.single.flagsCollection.isButton, isTrue);
       semantics.dispose();
     });
 
@@ -496,10 +593,563 @@ void main() {
       await _simular(tester, 'Simular: error');
       await _esperarCarga(tester);
       expect(find.byType(ErrorView), findsOneWidget);
-      expect(find.textContaining(_mensajeError), findsOneWidget);
+      expect(_mensajeEnErrorView(), findsOneWidget);
       expect(find.text('Reintentar'), findsOneWidget);
       expect(_temaDe(tester, find.byType(ErrorView)).brightness, Brightness.dark);
       expect(tester.takeException(), isNull);
+      await _esperarCierreDeAviso(tester);
+    });
+  });
+
+  group('Favoritos en memoria (Paso 6A)', () {
+    const tooltipAgregar = 'Agregar a favoritos';
+    const tooltipQuitar = 'Quitar de favoritos';
+
+    Finder tarjetaDe(Place lugar) => find.widgetWithText(PlaceCard, lugar.nombre);
+    Finder corazonDe(Place lugar) => find.descendant(
+          of: tarjetaDe(lugar),
+          matching: find.byType(IconButton),
+        );
+    IconButton botonCorazon(WidgetTester tester, Place lugar) =>
+        tester.widget<IconButton>(corazonDe(lugar));
+    IconData? iconoCorazon(WidgetTester tester, Place lugar) =>
+        (botonCorazon(tester, lugar).icon as Icon).icon;
+
+    Future<void> tocarCorazon(WidgetTester tester, Place lugar) async {
+      await tester.tap(corazonDe(lugar));
+      await tester.pump();
+    }
+
+    Future<void> tocarPestana(WidgetTester tester, String etiqueta) async {
+      await tester.tap(find.descendant(
+        of: find.byType(BottomNavigationBar),
+        matching: find.text(etiqueta),
+      ));
+      await tester.pump();
+    }
+
+    testWidgets('Inicio y Favoritos usan la misma instancia del controller', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final controller = _controller();
+      expect(
+        identical(tester.widget<HomeScreen>(find.byType(HomeScreen)).controller,
+            controller),
+        isTrue,
+      );
+
+      // Lo que se marca desde Inicio se ve en el contador de Favoritos.
+      await tocarCorazon(tester, lugaresEjemplo.first);
+      await tocarPestana(tester, 'Favoritos');
+      expect(identical(_controller(), controller), isTrue);
+      expect(find.textContaining('Favoritos marcados: 1.'), findsOneWidget);
+    });
+
+    testWidgets('El corazón marca y desmarca sin abrir el detalle', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final controller = _controller();
+      final lugar = lugaresEjemplo.first;
+
+      expect(controller.esFavorito(lugar), isFalse);
+      expect(iconoCorazon(tester, lugar), Icons.favorite_border);
+      expect(botonCorazon(tester, lugar).tooltip, tooltipAgregar);
+
+      await tocarCorazon(tester, lugar);
+      await tester.pumpAndSettle();
+      expect(find.byType(DetailScreen), findsNothing);
+      expect(controller.esFavorito(lugar), isTrue);
+      expect(iconoCorazon(tester, lugar), Icons.favorite);
+      expect(botonCorazon(tester, lugar).tooltip, tooltipQuitar);
+
+      await tocarCorazon(tester, lugar);
+      await tester.pumpAndSettle();
+      expect(find.byType(DetailScreen), findsNothing);
+      expect(controller.esFavorito(lugar), isFalse);
+      expect(iconoCorazon(tester, lugar), Icons.favorite_border);
+      expect(botonCorazon(tester, lugar).tooltip, tooltipAgregar);
+
+      // Tocar el resto de la tarjeta sigue abriendo el detalle.
+      await tester.tap(find.descendant(
+          of: tarjetaDe(lugar), matching: find.text(lugar.descripcion)));
+      await tester.pumpAndSettle();
+      expect(tester.widget<DetailScreen>(find.byType(DetailScreen)).place,
+          same(lugar));
+    });
+
+    testWidgets('No se añaden favoritos duplicados', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final controller = _controller();
+      final lugar = lugaresEjemplo.first;
+
+      await tocarCorazon(tester, lugar);
+      expect(controller.favoritos.where((p) => p.id == lugar.id).length, 1);
+
+      // Otra instancia con el mismo id cuenta como el mismo lugar: alterna
+      // (lo quita) en vez de sumar un duplicado.
+      final copia = Place(
+        id: lugar.id,
+        nombre: lugar.nombre,
+        categoria: lugar.categoria,
+        descripcion: lugar.descripcion,
+        lat: lugar.lat,
+        lng: lugar.lng,
+      );
+      expect(controller.esFavorito(copia), isTrue);
+      controller.alternarFavorito(copia);
+      await tester.pump();
+      expect(controller.favoritos, isEmpty);
+      expect(iconoCorazon(tester, lugar), Icons.favorite_border);
+
+      // Marcar dos lugares distintos deja dos favoritos con ids únicos.
+      final otro = lugaresEjemplo[1];
+      await tocarCorazon(tester, lugar);
+      await tocarCorazon(tester, otro);
+      final ids = controller.favoritos.map((p) => p.id).toList();
+      expect(ids, hasLength(2));
+      expect(ids.toSet(), hasLength(2));
+    });
+
+    testWidgets('totalFavoritos y el contador de la pestaña se actualizan', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final controller = _controller();
+      expect(controller.totalFavoritos, 0);
+
+      await tocarPestana(tester, 'Favoritos');
+      expect(find.textContaining('Favoritos marcados: 0.'), findsOneWidget);
+      await tocarPestana(tester, 'Inicio');
+
+      await tocarCorazon(tester, lugaresEjemplo[0]);
+      await tocarCorazon(tester, lugaresEjemplo[1]);
+      expect(controller.totalFavoritos, 2);
+      await tocarPestana(tester, 'Favoritos');
+      expect(find.textContaining('Favoritos marcados: 2.'), findsOneWidget);
+
+      // Con la pestaña Favoritos visible, el contador reacciona al instante.
+      controller.alternarFavorito(lugaresEjemplo[0]);
+      await tester.pump();
+      expect(controller.totalFavoritos, 1);
+      expect(find.textContaining('Favoritos marcados: 1.'), findsOneWidget);
+    });
+
+    testWidgets('Las marcas se conservan al cambiar de pestaña', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final marcado = lugaresEjemplo[0];
+      final sinMarcar = lugaresEjemplo[1];
+      await tocarCorazon(tester, marcado);
+
+      await tocarPestana(tester, 'Mapa');
+      expect(find.byType(HomeScreen), findsNothing);
+      await tocarPestana(tester, 'Favoritos');
+      await tocarPestana(tester, 'Inicio');
+      // Inicio se reconstruye sin recargar y con las mismas marcas.
+      expect(find.byType(LoadingView), findsNothing);
+      expect(iconoCorazon(tester, marcado), Icons.favorite);
+      expect(botonCorazon(tester, marcado).tooltip, tooltipQuitar);
+      expect(iconoCorazon(tester, sinMarcar), Icons.favorite_border);
+      expect(botonCorazon(tester, sinMarcar).tooltip, tooltipAgregar);
+      expect(_controller().totalFavoritos, 1);
+    });
+  });
+
+  group('Idioma con GetX (Paso 6B)', () {
+    const textosEs = {
+      'barra': ['Inicio', 'Mapa', 'Favoritos'],
+      'menu': ['Simular: normal', 'Simular: vacío', 'Simular: error'],
+      'tooltip': ['Cambiar idioma'],
+    };
+    const textosEn = {
+      'barra': ['Home', 'Map', 'Favorites'],
+      'menu': ['Simulate: normal', 'Simulate: empty', 'Simulate: error'],
+      'tooltip': ['Change language'],
+    };
+    const claves = [
+      'inicio', 'mapa', 'favoritos', 'idioma',
+      'sim_normal', 'sim_vacio', 'sim_error',
+    ];
+
+    Finder enBarra(String texto) => find.descendant(
+          of: find.byType(BottomNavigationBar),
+          matching: find.text(texto),
+        );
+
+    // Get.updateLocale() reconstruye toda la app con
+    // engine.performReassemble(). En el reloj simulado de las pruebas, ese
+    // frame de arranque choca con el pump siguiente ("schedulerPhase ==
+    // SchedulerPhase.idle"). Dentro de runAsync el reensamblado termina
+    // fuera de cualquier frame; después se dibuja con pumpAndSettle.
+    Future<void> tocarIdioma(WidgetTester tester, String tooltip) async {
+      await tester.runAsync(() async {
+        await tester.tap(find.byTooltip(tooltip));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      });
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> abrirMenu(WidgetTester tester) async {
+      await tester.tap(find.byTooltip('Simular estado (solo práctica)'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> cerrarMenu(WidgetTester tester) async {
+      await tester.tapAt(Offset.zero); // toque fuera del menú
+      await tester.pumpAndSettle();
+    }
+
+    /// Comprueba barra, menú y tooltip en un idioma, y que no se vea
+    /// ninguna clave sin traducir.
+    Future<void> comprobarTextos(
+      WidgetTester tester,
+      Map<String, List<String>> esperados,
+      Map<String, List<String>> otroIdioma,
+    ) async {
+      for (final texto in esperados['barra']!) {
+        expect(enBarra(texto), findsOneWidget, reason: texto);
+      }
+      for (final texto in otroIdioma['barra']!) {
+        expect(enBarra(texto), findsNothing, reason: texto);
+      }
+      expect(find.byTooltip(esperados['tooltip']!.single), findsOneWidget);
+
+      await abrirMenu(tester);
+      for (final texto in esperados['menu']!) {
+        expect(find.text(texto), findsOneWidget, reason: texto);
+      }
+      for (final texto in otroIdioma['menu']!) {
+        expect(find.text(texto), findsNothing, reason: texto);
+      }
+      for (final clave in claves) {
+        expect(find.text(clave), findsNothing, reason: 'Clave sin resolver: $clave');
+        expect(find.byTooltip(clave), findsNothing, reason: 'Clave sin resolver: $clave');
+      }
+      await cerrarMenu(tester);
+    }
+
+    testWidgets('Inicio arranca en español', (WidgetTester tester) async {
+      await _abrirAppCargada(tester);
+      expect(Get.locale, const Locale('es', 'EC'));
+      await comprobarTextos(tester, textosEs, textosEn);
+    });
+
+    testWidgets('El botón cambia a inglés y vuelve a español', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+
+      await tocarIdioma(tester, 'Cambiar idioma');
+      expect(Get.locale, const Locale('en', 'US'));
+      await comprobarTextos(tester, textosEn, textosEs);
+
+      // Las opciones traducidas siguen funcionando.
+      await abrirMenu(tester);
+      await tester.tap(find.text('Simulate: empty'));
+      await tester.pump();
+      await _esperarCarga(tester);
+      expect(find.byType(EmptyView), findsOneWidget);
+
+      await tocarIdioma(tester, 'Change language');
+      expect(Get.locale, const Locale('es', 'EC'));
+      await comprobarTextos(tester, textosEs, textosEn);
+    });
+
+    testWidgets('Cambiar de idioma conserva controller, lugares y favoritos', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final controller = _controller();
+      final idsLugares = controller.lugares.map((p) => p.id).toList();
+      final favorito = lugaresEjemplo[1];
+      await tester.tap(find.descendant(
+        of: find.widgetWithText(PlaceCard, favorito.nombre),
+        matching: find.byType(IconButton),
+      ));
+      await tester.pump();
+      expect(controller.esFavorito(favorito), isTrue);
+
+      await tocarIdioma(tester, 'Cambiar idioma');
+
+      // Misma instancia y mismos datos, sin volver a cargar.
+      expect(identical(_controller(), controller), isTrue);
+      expect(find.byType(LoadingView), findsNothing);
+      expect(controller.estado.value, EstadoCarga.exito);
+      expect(controller.lugares.map((p) => p.id).toList(), idsLugares);
+      expect(find.byType(PlaceCard), findsWidgets);
+      expect(controller.totalFavoritos, 1);
+      expect(controller.esFavorito(favorito), isTrue);
+      expect(
+        tester
+            .widget<IconButton>(find.descendant(
+              of: find.widgetWithText(PlaceCard, favorito.nombre),
+              matching: find.byType(IconButton),
+            ))
+            .tooltip,
+        'Quitar de favoritos',
+      );
+
+      // En inglés, la pestaña Favoritos lee el mismo contador.
+      await tester.tap(enBarra('Favorites'));
+      await tester.pump();
+      expect(find.textContaining('Favoritos marcados: 1.'), findsOneWidget);
+      expect(
+        tester.widget<BottomNavigationBar>(find.byType(BottomNavigationBar))
+            .currentIndex,
+        2,
+      );
+
+      // De vuelta en Inicio y otra vez en español: todo sigue igual.
+      await tester.tap(enBarra('Home'));
+      await tester.pump();
+      await tocarIdioma(tester, 'Change language');
+      expect(Get.locale, const Locale('es', 'EC'));
+      expect(identical(_controller(), controller), isTrue);
+      expect(find.byType(LoadingView), findsNothing);
+      expect(controller.lugares.map((p) => p.id).toList(), idsLugares);
+      expect(controller.esFavorito(favorito), isTrue);
+    });
+  });
+
+  group('Contador y avisos de PlacesController', () {
+    Future<void> agregarLugarDesdeFormulario(
+      WidgetTester tester,
+      String nombre, {
+      bool? avisoAbiertoAlGuardar,
+    }) async {
+      await tester.tap(find.byType(FloatingActionButton));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.widgetWithText(TextFormField, 'Nombre del lugar'), nombre);
+      await tester.enterText(
+          find.widgetWithText(TextFormField, 'Categoría'), 'Pruebas');
+      await tester.enterText(find.widgetWithText(TextFormField, 'Descripción'),
+          'Lugar sintético creado por la prueba.');
+      if (avisoAbiertoAlGuardar != null) {
+        // Precondición del escenario: sin esto la prueba no reproduce nada.
+        expect(Get.isSnackbarOpen, avisoAbiertoAlGuardar,
+            reason: 'Estado del aviso justo antes de pulsar Guardar');
+      }
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Guardar'));
+      await tester.pump();
+      await tester.pumpAndSettle(); // transición de vuelta y entrada del aviso
+    }
+
+    testWidgets('El título muestra el total y sube al guardar', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(const ExploraEcApp());
+      // Mientras carga, la lista aún está vacía.
+      expect(find.text('ExploraEC (0)'), findsOneWidget);
+      await _esperarCarga(tester);
+
+      final total = lugaresEjemplo.length;
+      expect(_controller().total, total);
+      expect(find.text('ExploraEC ($total)'), findsOneWidget);
+
+      await agregarLugarDesdeFormulario(tester, 'Mirador del Contador');
+      expect(_controller().total, total + 1);
+      expect(find.text('ExploraEC (${total + 1})'), findsOneWidget);
+      expect(find.text('ExploraEC ($total)'), findsNothing);
+      await _esperarCierreDeAviso(tester);
+
+      // Vacío también se refleja en el contador.
+      await _simular(tester, 'Simular: vacío');
+      await _esperarCarga(tester);
+      expect(find.text('ExploraEC (0)'), findsOneWidget);
+    });
+
+    testWidgets('Guardar un lugar muestra el aviso de alta', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      expect(Get.isSnackbarOpen, isFalse);
+
+      await agregarLugarDesdeFormulario(tester, 'Mirador del Aviso');
+      expect(find.byType(AddPlaceScreen), findsNothing);
+      expect(Get.isSnackbarOpen, isTrue);
+      expect(find.text('Lugar agregado'), findsOneWidget);
+      expect(find.text('Ya aparece en Inicio'), findsOneWidget);
+
+      await _esperarCierreDeAviso(tester);
+      expect(find.text('Lugar agregado'), findsNothing);
+    });
+
+    testWidgets('Un error de carga muestra el aviso con el mensaje', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      // Una carga exitosa no avisa.
+      expect(Get.isSnackbarOpen, isFalse);
+
+      await _simular(tester, 'Simular: error');
+      await _esperarCarga(tester);
+      expect(Get.isSnackbarOpen, isTrue);
+      expect(find.text('Error'), findsOneWidget);
+      // El mensaje aparece en ErrorView y en el aviso.
+      expect(find.textContaining(_mensajeError), findsNWidgets(2));
+      expect(_mensajeEnErrorView(), findsOneWidget);
+
+      await _esperarCierreDeAviso(tester);
+      expect(find.text('Error'), findsNothing);
+    });
+
+    testWidgets('Recargar no registra workers adicionales', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+
+      // Varias recargas exitosas: no avisan y no suman workers.
+      for (var i = 0; i < 3; i++) {
+        await _simular(tester, 'Simular: normal');
+        await _esperarCarga(tester);
+        expect(Get.isSnackbarOpen, isFalse);
+      }
+
+      // Cada error produce exactamente UN aviso. Si cada carga registrara
+      // un worker, habría varios avisos en cola y, al cerrarse el primero,
+      // se abriría otro (lo detecta _esperarCierreDeAviso).
+      await _simular(tester, 'Simular: error');
+      await _esperarCarga(tester);
+      expect(find.text('Error'), findsOneWidget);
+      await _esperarCierreDeAviso(tester);
+
+      for (var i = 0; i < 3; i++) {
+        await tester.tap(find.text('Reintentar'));
+        await tester.pump();
+        await _esperarCarga(tester);
+        expect(find.text('Error'), findsOneWidget, reason: 'Reintento ${i + 1}');
+        await _esperarCierreDeAviso(tester);
+      }
+    });
+
+    int vecesEnController(String nombre) =>
+        _controller().lugares.where((p) => p.nombre == nombre).length;
+    int vecesEnDatos(String nombre) =>
+        lugaresEjemplo.where((p) => p.nombre == nombre).length;
+
+    testWidgets('Dos altas seguidas con el primer aviso visible cierran ambos formularios', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final total = _controller().total;
+
+      await agregarLugarDesdeFormulario(tester, 'Primer Lugar Rápido',
+          avisoAbiertoAlGuardar: false);
+      expect(find.byType(AddPlaceScreen), findsNothing);
+      expect(find.text('Lugar agregado'), findsOneWidget);
+
+      // Sin esperar a que el aviso desaparezca: es justo el caso del fallo.
+      await agregarLugarDesdeFormulario(tester, 'Segundo Lugar Rápido',
+          avisoAbiertoAlGuardar: true);
+      expect(find.byType(AddPlaceScreen), findsNothing,
+          reason: 'El segundo formulario debe cerrarse aunque hubiera un aviso');
+      expect(find.byType(HomeScreen), findsOneWidget);
+
+      expect(_controller().total, total + 2);
+      expect(find.text('ExploraEC (${total + 2})'), findsOneWidget);
+      for (final nombre in ['Primer Lugar Rápido', 'Segundo Lugar Rápido']) {
+        expect(vecesEnController(nombre), 1, reason: nombre);
+        expect(vecesEnDatos(nombre), 1, reason: nombre);
+      }
+
+      // El aviso de alta del segundo lugar se muestra tras cerrar el formulario.
+      expect(Get.isSnackbarOpen, isTrue);
+      expect(find.text('Lugar agregado'), findsOneWidget);
+      await _esperarCierreDeAviso(tester);
+
+      // Cada lugar aparece una sola vez en la lista de Inicio.
+      for (final nombre in ['Primer Lugar Rápido', 'Segundo Lugar Rápido']) {
+        final tarjeta = find.widgetWithText(PlaceCard, nombre);
+        await tester.scrollUntilVisible(tarjeta, 200,
+            scrollable: find.byType(Scrollable));
+        expect(tarjeta, findsOneWidget, reason: nombre);
+      }
+    });
+
+    testWidgets('Guardar con un aviso de error visible cierra el formulario', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      await _simular(tester, 'Simular: error');
+      await _esperarCarga(tester);
+      expect(find.text('Error'), findsOneWidget);
+      final total = _controller().total;
+
+      const nombre = 'Lugar Durante el Error';
+      await agregarLugarDesdeFormulario(tester, nombre,
+          avisoAbiertoAlGuardar: true);
+
+      expect(find.byType(AddPlaceScreen), findsNothing);
+      expect(find.byType(HomeScreen), findsOneWidget);
+      expect(_controller().total, total + 1);
+      expect(vecesEnController(nombre), 1);
+      expect(vecesEnDatos(nombre), 1);
+      // El aviso de error se cerró; ahora se muestra el de alta.
+      expect(find.text('Error'), findsNothing);
+      expect(find.text('Lugar agregado'), findsOneWidget);
+      await _esperarCierreDeAviso(tester);
+    });
+
+    for (final brillo in Brightness.values) {
+      testWidgets('Los avisos usan colores opacos del tema (${brillo.name})', (
+        WidgetTester tester,
+      ) async {
+        _simularBrillo(tester, brillo);
+        await _abrirAppCargada(tester);
+        final esquema = _temaDe(tester, find.byType(HomeScreen)).colorScheme;
+        expect(esquema.brightness, brillo);
+
+        Color? colorDe(String texto) =>
+            tester.widget<Text>(find.text(texto)).style?.color;
+
+        await agregarLugarDesdeFormulario(tester, 'Lugar de Colores ${brillo.name}');
+        final alta = tester.widget<GetSnackBar>(find.byType(GetSnackBar));
+        expect(alta.backgroundColor, esquema.inverseSurface);
+        expect(alta.backgroundColor.a, 1.0); // opaco
+        expect(colorDe('Lugar agregado'), esquema.onInverseSurface);
+        expect(colorDe('Ya aparece en Inicio'), esquema.onInverseSurface);
+        await _esperarCierreDeAviso(tester);
+
+        await _simular(tester, 'Simular: error');
+        await _esperarCarga(tester);
+        final error = tester.widget<GetSnackBar>(find.byType(GetSnackBar));
+        expect(error.backgroundColor, esquema.error);
+        expect(error.backgroundColor.a, 1.0);
+        expect(colorDe('Error'), esquema.onError);
+        await _esperarCierreDeAviso(tester);
+      });
+    }
+
+    testWidgets('onClose() cancela el worker de errores', (
+      WidgetTester tester,
+    ) async {
+      // App mínima de GetX: permite mostrar avisos sin montar Inicio.
+      await tester.pumpWidget(const GetMaterialApp(home: SizedBox()));
+      final controller = Get.put(PlacesController());
+      await tester.pump(_demoraCarga);
+      await tester.pumpAndSettle();
+      expect(controller.estado.value, EstadoCarga.exito);
+
+      // Control: con el controller vivo, pasar a error sí avisa.
+      controller.estado.value = EstadoCarga.error;
+      await tester.pump();
+      expect(Get.isSnackbarOpen, isTrue);
+      await tester.pumpAndSettle();
+      await _esperarCierreDeAviso(tester);
+
+      // Tras eliminarlo (llama a onClose), el worker ya no escucha.
+      controller.estado.value = EstadoCarga.exito;
+      expect(await Get.delete<PlacesController>(), isTrue);
+      expect(Get.isRegistered<PlacesController>(), isFalse);
+      controller.estado.value = EstadoCarga.error;
+      await tester.pump();
+      expect(Get.isSnackbarOpen, isFalse);
     });
   });
 
@@ -543,12 +1193,26 @@ void main() {
         campo('Descripción'),
         'Lugar sintético creado por la prueba del formulario.',
       );
+      final controller = _controller();
+      final cantidadEnController = controller.lugares.length;
+
       await tester.tap(find.widgetWithText(ElevatedButton, 'Guardar'));
       await tester.pump();
+      // agregarLugar() actualiza la RxList: Obx redibuja Inicio sin pasar
+      // por el estado de carga, ni durante ni después de la transición.
+      expect(controller.estado.value, EstadoCarga.exito);
+      expect(find.byType(LoadingView), findsNothing);
+      await tester.pumpAndSettle(); // transición de Get.back()
+      expect(find.byType(LoadingView), findsNothing);
 
-      // Al volver, HomeScreen llama a _cargar(): nueva carga simulada.
-      await _esperarCarga(tester);
       expect(find.byType(AddPlaceScreen), findsNothing);
+      expect(controller.lugares.length, cantidadEnController + 1);
+      expect(controller.lugares.last.nombre, nombre);
+      // assignAll copia la lista: el lugar no queda duplicado.
+      expect(
+        controller.lugares.where((p) => p.nombre == nombre).length,
+        1,
+      );
       expect(find.byType(HomeScreen), findsOneWidget);
       expect(lugaresEjemplo.length, cantidadInicial + 1);
       expect(lugaresEjemplo.last.nombre, nombre);
@@ -560,6 +1224,7 @@ void main() {
         scrollable: find.byType(Scrollable),
       );
       expect(find.widgetWithText(PlaceCard, nombre), findsOneWidget);
+      await _esperarCierreDeAviso(tester);
     });
   });
 

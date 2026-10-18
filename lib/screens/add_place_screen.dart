@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+
+import '../controllers/places_controller.dart';
 import '../models/place.dart';
 
-/// Formulario "Agregar lugar": valida y agrega un [Place] a la lista
-/// en memoria — Sesión 2. Persistencia real llega en la Sesión 7.
+/// Formulario "Agregar lugar": valida y agrega un [Place] — Sesión 2.
+/// Desde la Sesión 4, el nuevo lugar se agrega vía `PlacesController`
+/// (`Get.find`) en vez de mutar `lugaresEjemplo` directamente y recargar a
+/// mano al volver: Inicio (y, más adelante, el Mapa) lo muestran de
+/// inmediato. Persistencia real (que sobreviva reiniciar la app) llega en
+/// la Sesión 7.
 class AddPlaceScreen extends StatefulWidget {
   const AddPlaceScreen({super.key});
 
@@ -55,9 +62,9 @@ class _AddPlaceScreenState extends State<AddPlaceScreen> {
               ),
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: () {
+                onPressed: () async {
                   if (_formKey.currentState!.validate()) {
-                    lugaresEjemplo.add(Place(
+                    Get.find<PlacesController>().agregarLugar(Place(
                       id: DateTime.now().millisecondsSinceEpoch.toString(),
                       nombre: _nombreController.text.trim(),
                       categoria: _categoriaController.text.trim(),
@@ -65,7 +72,23 @@ class _AddPlaceScreenState extends State<AddPlaceScreen> {
                       lat: -0.1807,
                       lng: -78.4859,
                     ));
-                    Navigator.pop(context);
+                    // Colores del tema activo (claro u oscuro), leídos antes
+                    // de cerrar esta pantalla.
+                    final esquema = Theme.of(context).colorScheme;
+                    // closeOverlays: true cierra también un aviso abierto;
+                    // sin eso, en GetX 4.x Get.back() cerraría solo el aviso
+                    // y el formulario quedaría abierto.
+                    Get.back(closeOverlays: true);
+                    // Ese cierre vacía la cola de avisos al terminar su
+                    // animación: un aviso nuevo encolado antes se perdería.
+                    // Se espera a que termine (no hace nada si no había aviso).
+                    await SnackbarController.closeCurrentSnackbar();
+                    Get.snackbar(
+                      'Lugar agregado',
+                      'Ya aparece en Inicio',
+                      backgroundColor: esquema.inverseSurface,
+                      colorText: esquema.onInverseSurface,
+                    );
                   }
                 },
                 child: const Text('Guardar'),
