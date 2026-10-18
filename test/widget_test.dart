@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
@@ -7,14 +10,18 @@ import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import 'package:exploraec/bienvenida_claude_design.dart';
+import 'package:exploraec/controllers/gastos_controller.dart';
 import 'package:exploraec/controllers/places_controller.dart';
 import 'package:exploraec/main.dart';
 import 'package:exploraec/models/place.dart';
 import 'package:exploraec/screens/add_place_screen.dart';
 import 'package:exploraec/screens/detail_screen.dart';
 import 'package:exploraec/screens/favorites_placeholder_screen.dart';
+import 'package:exploraec/screens/gastos_screen.dart';
 import 'package:exploraec/screens/home_screen.dart';
 import 'package:exploraec/screens/map_screen.dart';
 import 'package:exploraec/services/location_service.dart';
@@ -160,6 +167,19 @@ class _TeselasDePrueba extends TileProvider {
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
     pedidas.add(coordinates);
     return MemoryImage(_pngTransparente);
+  }
+}
+
+/// Registra cada intento de crear un cliente HTTP (lo que hace el paquete
+/// `http` antes de cualquier petición) y lo hace fallar: así una prueba
+/// puede afirmar que no se habló con ningún servidor.
+class _SinRed extends HttpOverrides {
+  int intentos = 0;
+
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    intentos++;
+    throw StateError('La prueba no permite peticiones HTTP');
   }
 }
 
@@ -875,17 +895,17 @@ void main() {
 
   group('Idioma con GetX (Paso 6B)', () {
     const textosEs = {
-      'barra': ['Inicio', 'Mapa', 'Favoritos'],
+      'barra': ['Inicio', 'Mapa', 'Favoritos', 'Gastos'],
       'menu': ['Simular: normal', 'Simular: vacío', 'Simular: error'],
       'tooltip': ['Cambiar idioma'],
     };
     const textosEn = {
-      'barra': ['Home', 'Map', 'Favorites'],
+      'barra': ['Home', 'Map', 'Favorites', 'Expenses'],
       'menu': ['Simulate: normal', 'Simulate: empty', 'Simulate: error'],
       'tooltip': ['Change language'],
     };
     const claves = [
-      'inicio', 'mapa', 'favoritos', 'idioma',
+      'inicio', 'mapa', 'favoritos', 'gastos', 'idioma',
       'sim_normal', 'sim_vacio', 'sim_error',
     ];
 
@@ -1493,6 +1513,192 @@ void main() {
         semantica.dispose();
       });
     }
+  });
+
+  group('Gastos (Sesión 6, Paso 5)', () {
+    testWidgets('La barra tiene 4 pestañas fijas y la cuarta es Gastos', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final barra =
+          tester.widget<BottomNavigationBar>(find.byType(BottomNavigationBar));
+      expect(barra.type, BottomNavigationBarType.fixed);
+      expect(barra.items.map((i) => i.label).toList(),
+          ['Inicio', 'Mapa', 'Favoritos', 'Gastos']);
+      expect((barra.items.last.icon as Icon).icon, Icons.receipt_long);
+
+      await tester.tap(find.descendant(
+        of: find.byType(BottomNavigationBar),
+        matching: find.text('Gastos'),
+      ));
+      await tester.pump();
+      expect(find.byType(GastosScreen), findsOneWidget);
+      expect(find.byType(HomeScreen), findsNothing);
+      expect(
+        tester.widget<BottomNavigationBar>(find.byType(BottomNavigationBar))
+            .currentIndex,
+        3,
+      );
+    });
+
+    testWidgets('Entrar con datos válidos completa el flujo y muestra los gastos', (
+      WidgetTester tester,
+    ) async {
+      // Red real bloqueada: cualquier conexión de verdad haría fallar la prueba.
+      final sinRed = _SinRed();
+      final anterior = HttpOverrides.current;
+      HttpOverrides.global = sinRed;
+      addTearDown(() => HttpOverrides.global = anterior);
+
+      // Backend simulado (contrato del Paso 4), sin servidor real.
+      final rutas = <String>[];
+      final servidor = MockClient((req) async {
+        rutas.add('${req.method} ${req.url.path}');
+        http.Response json(Object cuerpo, int codigo,
+                {Map<String, String> cabeceras = const {}}) =>
+            http.Response(jsonEncode(cuerpo), codigo,
+                headers: {'content-type': 'application/json', ...cabeceras});
+        switch (req.url.path) {
+          case '/usuarios/':
+            return json({'detail': 'El email ya está registrado'}, 400);
+          case '/usuarios/token':
+            return json({'access_token': 'token-sintetico', 'token_type': 'bearer'}, 200);
+          case '/gastos/':
+            return json([
+              {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-17'},
+              {'id': 2, 'descripcion': 'Taxi al Panecillo', 'monto': 4, 'categoria': 'transporte', 'fecha': '2026-10-17'},
+            ], 200, cabeceras: {'x-total-count': '2'});
+        }
+        return json({'detail': 'no existe'}, 404);
+      });
+
+      await _abrirAppCargada(tester);
+      await tester.tap(find.descendant(
+        of: find.byType(BottomNavigationBar),
+        matching: find.text('Gastos'),
+      ));
+      await tester.pump();
+
+      // Sin sesión: formulario de entrada.
+      final controller = Get.find<GastosController>();
+      expect(controller.sesionActiva.value, isFalse);
+      expect(find.widgetWithText(TextField, 'Correo'), findsOneWidget);
+      expect(find.text('Servidor: http://10.0.2.2:8000'), findsOneWidget);
+
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Correo'), 'prueba@ejemplo.com');
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'),
+          'clave-1234');
+      // El toque (y todo el flujo async que dispara) usa el backend simulado.
+      await http.runWithClient(() async {
+        await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
+        await tester.pump();
+        await tester.pump();
+      }, () => servidor);
+      await tester.pumpAndSettle();
+
+      expect(rutas, ['POST /usuarios/', 'POST /usuarios/token', 'GET /gastos/']);
+      expect(controller.sesionActiva.value, isTrue);
+      expect(controller.autenticando.value, isFalse);
+      expect(find.text('Pendiente: conecta el flujo en el Paso 7'), findsNothing);
+      // La pantalla cambió del formulario a la lista con los 3 estados.
+      expect(find.widgetWithText(TextField, 'Correo'), findsNothing);
+      expect(find.text('Gastos (2)'), findsOneWidget);
+      expect(find.text('Almuerzo en el Mercado Central'), findsOneWidget);
+      expect(find.text('6.50'), findsOneWidget);
+      expect(find.text('Taxi al Panecillo'), findsOneWidget);
+      expect(find.text('4.00'), findsOneWidget);
+      expect(sinRed.intentos, 0, reason: 'No debe abrirse ninguna conexión real');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Deslizar hacia abajo vuelve a pedir la primera página y actualiza la lista', (
+      WidgetTester tester,
+    ) async {
+      final sinRed = _SinRed();
+      final anterior = HttpOverrides.current;
+      HttpOverrides.global = sinRed;
+      addTearDown(() => HttpOverrides.global = anterior);
+
+      // Backend simulado: la segunda consulta trae un gasto nuevo, como si
+      // se hubiera registrado mientras tanto.
+      final consultas = <Map<String, String>>[];
+      final servidor = MockClient((req) async {
+        http.Response json(Object cuerpo, int codigo,
+                {Map<String, String> cabeceras = const {}}) =>
+            http.Response(jsonEncode(cuerpo), codigo,
+                headers: {'content-type': 'application/json', ...cabeceras});
+        switch (req.url.path) {
+          case '/usuarios/':
+            return json({'detail': 'El email ya está registrado'}, 400);
+          case '/usuarios/token':
+            return json({'access_token': 'token-sintetico', 'token_type': 'bearer'}, 200);
+          case '/gastos/':
+            consultas.add(req.url.queryParameters);
+            final gastos = [
+              {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
+              if (consultas.length > 1)
+                {'id': 2, 'descripcion': 'Café en La Ronda', 'monto': 2.75, 'categoria': 'comida', 'fecha': '2026-10-18'},
+            ];
+            return json(gastos, 200, cabeceras: {'x-total-count': '${gastos.length}'});
+        }
+        return json({'detail': 'no existe'}, 404);
+      });
+
+      await _abrirAppCargada(tester);
+      await tester.tap(find.descendant(
+        of: find.byType(BottomNavigationBar),
+        matching: find.text('Gastos'),
+      ));
+      await tester.pump();
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Correo'), 'prueba@ejemplo.com');
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'),
+          'clave-1234');
+
+      await http.runWithClient(() async {
+        await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
+        await tester.pump();
+        await tester.pump();
+        await tester.pumpAndSettle();
+
+        // Primera carga: un solo gasto, la lista no llena la pantalla.
+        expect(consultas, [
+          {'skip': '0', 'limit': '20'}
+        ]);
+        expect(find.text('Gastos (1)'), findsOneWidget);
+        expect(find.text('Café en La Ronda'), findsNothing);
+        expect(find.byType(RefreshIndicator), findsOneWidget);
+        final lista = tester.widget<ListView>(find.descendant(
+            of: find.byType(RefreshIndicator), matching: find.byType(ListView)));
+        expect(lista.physics, isA<AlwaysScrollableScrollPhysics>());
+
+        // Gesto: deslizar la lista hacia abajo desde el primer gasto.
+        await tester.fling(
+            find.text('Almuerzo en el Mercado Central'), const Offset(0, 400), 1500);
+        await tester.pump(); // arranca la recarga
+        await tester.pump(const Duration(seconds: 1)); // animación del indicador
+        await tester.pumpAndSettle();
+      }, () => servidor);
+
+      // Se pidió otra vez la primera página y la lista se actualizó.
+      expect(consultas, [
+        {'skip': '0', 'limit': '20'},
+        {'skip': '0', 'limit': '20'},
+      ]);
+      final controller = Get.find<GastosController>();
+      expect(controller.estado.value, EstadoCarga.exito);
+      expect(controller.gastos.map((g) => g.descripcion).toList(),
+          ['Almuerzo en el Mercado Central', 'Café en La Ronda']);
+      expect(find.text('Gastos (2)'), findsOneWidget);
+      expect(find.text('Café en La Ronda'), findsOneWidget);
+      expect(find.text('2.75'), findsOneWidget);
+      expect(find.byType(RefreshIndicator), findsOneWidget);
+      expect(sinRed.intentos, 0, reason: 'No debe abrirse ninguna conexión real');
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('Contador y avisos de PlacesController', () {

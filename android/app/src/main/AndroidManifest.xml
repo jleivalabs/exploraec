@@ -1,7 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Sesión 6: acceso a red para el backend de gastos (y las teselas del mapa en release). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- usesCleartextTraffic="true" permite HTTP sin TLS hacia el backend local
+         (http://10.0.2.2:8000). Solo para desarrollo: una app publicada debe usar HTTPS
+         y quitar este atributo (o limitarlo con network_security_config). -->
     <application
+        android:usesCleartextTraffic="true"
         android:label="exploraec"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

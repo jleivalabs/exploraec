@@ -7,6 +7,7 @@ import 'i18n/app_translations.dart';
 import 'screens/home_screen.dart';
 import 'screens/map_screen.dart';
 import 'screens/favorites_placeholder_screen.dart';
+import 'screens/gastos_screen.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -57,9 +58,13 @@ class _RootShellState extends State<RootShell> {
       body: switch (_indiceActual) {
         0 => const HomeScreen(),
         1 => const MapScreen(),
-        _ => const FavoritesPlaceholderScreen(),
+        2 => const FavoritesPlaceholderScreen(),
+        _ => const GastosScreen(),
       },
       bottomNavigationBar: BottomNavigationBar(
+        // Con 4 pestañas Flutter cambia por defecto al tipo `shifting`
+        // (etiquetas ocultas salvo la activa); `fixed` las muestra todas.
+        type: BottomNavigationBarType.fixed,
         currentIndex: _indiceActual,
         onTap: (i) => setState(() => _indiceActual = i),
         // Por qué: `.tr` no es una constante (depende del idioma activo), por
@@ -69,6 +74,7 @@ class _RootShellState extends State<RootShell> {
           BottomNavigationBarItem(icon: const Icon(Icons.home), label: 'inicio'.tr),
           BottomNavigationBarItem(icon: const Icon(Icons.map), label: 'mapa'.tr),
           BottomNavigationBarItem(icon: const Icon(Icons.favorite), label: 'favoritos'.tr),
+          BottomNavigationBarItem(icon: const Icon(Icons.receipt_long), label: 'gastos'.tr),
         ],
       ),
     );
