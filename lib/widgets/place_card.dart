@@ -5,6 +5,7 @@ import '../controllers/places_controller.dart';
 import '../models/place.dart';
 import '../screens/detail_screen.dart';
 import '../theme/app_theme.dart';
+import '../services/location_service.dart';
 
 /// Tarjeta reutilizable que representa un [Place] en cualquier lista de
 /// la app (Inicio, resultados de categoría, etc.) — Sesión 2.
@@ -77,7 +78,43 @@ class PlaceCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: AppSpacing.xs),
-                Text(place.categoria, style: estilos.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                // Por qué: `distanciaA` devuelve null mientras el controller
+                // no tiene la posición (antes de abrir el Mapa), así que el
+                // `Obx` no pinta nada; apenas `posicion` se llena, todas las
+                // tarjetas muestran la distancia sin recargar la lista.
+                // Ajuste propio: la distancia va en la misma línea que la
+                // categoría (no en una fila aparte) porque la fila extra
+                // desbordaba las celdas más estrechas de la grilla
+                // (childAspectRatio 2.2, a 600 y 900 px). Cada texto se recorta
+                // con "…" si no cabe, así la línea nunca crece en altura.
+                Obx(() {
+                  final metros = Get.find<PlacesController>().distanciaA(place);
+                  return Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          place.categoria,
+                          style: estilos.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (metros != null) ...[
+                        const SizedBox(width: AppSpacing.sm),
+                        const Icon(Icons.near_me, size: 14),
+                        const SizedBox(width: AppSpacing.xs),
+                        Flexible(
+                          child: Text(
+                            'A ${formatearDistancia(metros)} de ti',
+                            style: estilos.bodySmall,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ],
+                  );
+                }),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   place.descripcion,

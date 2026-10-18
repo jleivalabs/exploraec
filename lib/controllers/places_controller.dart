@@ -1,6 +1,8 @@
+import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
 
 import '../models/place.dart';
+import '../services/location_service.dart';
 
 enum EstadoCarga { cargando, exito, error }
 
@@ -11,10 +13,18 @@ enum EstadoCarga { cargando, exito, error }
 /// formulario. Ahora vive aquí, registrado una sola vez por
 /// `PlacesBinding` y obtenido con `Get.find()` (vía `GetView`, ver
 /// `HomeScreen`): cualquier pantalla futura lo lee sin repetir esa carga.
+///
+/// Desde la Sesión 5 también guarda la posición real del usuario
+/// (`posicion`, con su propio estado) para que el Mapa —y, en la Sesión 6,
+/// la consulta a la Overpass API— la lean sin pedirla de nuevo al sistema
+/// operativo.
 class PlacesController extends GetxController {
   final RxList<Place> lugares = <Place>[].obs;
   final Rx<EstadoCarga> estado = EstadoCarga.cargando.obs;
   final RxString mensajeError = ''.obs;
+  final Rx<Position?> posicion = Rx<Position?>(null);
+  final Rx<EstadoCarga> estadoPosicion = EstadoCarga.cargando.obs;
+  final RxString mensajeErrorPosicion = ''.obs;
 
   bool _modoDebugError = false;
   bool _modoDebugVacio = false;
@@ -88,11 +98,33 @@ class PlacesController extends GetxController {
     }
   }
 
+  /// Pide la posición real al sistema operativo una sola vez y la deja en
+  /// [posicion]; si ya la tiene, no vuelve a pedirla salvo que se pida con
+  /// [forzar] (por ejemplo, desde el botón "Reintentar" del Mapa).
+  Future<void> cargarPosicion({bool forzar = false}) async {
+    if (posicion.value != null && !forzar) {
+      estadoPosicion.value = EstadoCarga.exito;
+      return;
+    }
+    estadoPosicion.value = EstadoCarga.cargando;
+    try {
+      posicion.value = await LocationService.obtenerPosicionActual();
+      estadoPosicion.value = EstadoCarga.exito;
+    } on LocationException catch (e) {
+      mensajeErrorPosicion.value = e.mensaje;
+      estadoPosicion.value = EstadoCarga.error;
+    } catch (e) {
+      mensajeErrorPosicion.value = '$e';
+      estadoPosicion.value = EstadoCarga.error;
+    }
+  }
+
   /// Agrega un lugar creado a mano (`AddPlaceScreen`) — en memoria
   /// únicamente hasta que la Sesión 7 lo persista con Hive. `lugares.add`
   /// (en vez de reconstruir toda la lista) ya notifica a cualquier `Obx`
-  /// que esté escuchando: Inicio se actualiza solo, sin el `_cargar()`
-  /// manual que la Sesión 3 hacía al volver del formulario.
+  /// que esté escuchando (Inicio y, desde la Sesión 5, el Mapa) se
+  /// actualiza solo, sin el `_cargar()` manual que la Sesión 3 hacía al
+  /// volver del formulario.
   void agregarLugar(Place lugar) {
     lugaresEjemplo.add(lugar);
     lugares.add(lugar);
@@ -118,5 +150,12 @@ class PlacesController extends GetxController {
     } else {
       favoritos.add(lugar);
     }
+  }
+
+  /// Distancia en metros desde la posición actual hasta [lugar], o `null`
+  /// mientras todavía no se conoce la posición (antes de abrir el Mapa).
+  double? distanciaA(Place lugar) {
+    final pos = posicion.value;
+    return pos == null ? null : distanciaAPlaceEnMetros(pos, lugar);
   }
 }

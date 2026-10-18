@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:exploraec/bienvenida_claude_design.dart';
@@ -12,7 +16,8 @@ import 'package:exploraec/screens/add_place_screen.dart';
 import 'package:exploraec/screens/detail_screen.dart';
 import 'package:exploraec/screens/favorites_placeholder_screen.dart';
 import 'package:exploraec/screens/home_screen.dart';
-import 'package:exploraec/screens/map_placeholder_screen.dart';
+import 'package:exploraec/screens/map_screen.dart';
+import 'package:exploraec/services/location_service.dart';
 import 'package:exploraec/theme/app_theme.dart';
 import 'package:exploraec/widgets/empty_view.dart';
 import 'package:exploraec/widgets/error_view.dart';
@@ -58,6 +63,105 @@ Finder _mensajeEnErrorView() => find.descendant(
       of: find.byType(ErrorView),
       matching: find.textContaining(_mensajeError),
     );
+
+// Ubicación simulada (Sesión 5). geolocator habla con la plataforma por
+// este canal; en las pruebas no hay plataforma real.
+const _canalGeolocator = MethodChannel('flutter.baseflow.com/geolocator');
+const _mensajePermisoDenegado =
+    'Permiso de ubicación denegado. ExploraEC lo necesita para mostrarte lugares cercanos.';
+
+// Permisos tal como los devuelve el canal de geolocator
+// (LocationPermission: 0 denied, 1 deniedForever, 2 whileInUse, 3 always).
+const _permisoDenegado = 0;
+const _permisoBloqueado = 1;
+const _permisoConcedido = 2;
+
+// Posición sintética (centro-norte de Quito) para las pruebas.
+const _latSimulada = -0.1807;
+const _lngSimulada = -78.4859;
+
+const _mensajeUbicacionApagada =
+    'La ubicación está desactivada en el dispositivo. Actívala en Ajustes y vuelve a intentar.';
+const _mensajePermisoBloqueado =
+    'Permiso de ubicación bloqueado permanentemente. Actívalo manualmente desde Ajustes de la app.';
+
+/// Simula las respuestas nativas de geolocator y devuelve, en orden, los
+/// métodos que la app llamó. La simulación se retira al terminar la prueba.
+/// Cualquier método no previsto falla con PlatformException.
+List<String> _simularUbicacion({
+  bool servicioActivo = true,
+  int permisoActual = _permisoDenegado,
+  int permisoTrasSolicitar = _permisoDenegado,
+}) {
+  final llamadas = <String>[];
+  final mensajero =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  mensajero.setMockMethodCallHandler(_canalGeolocator, (llamada) async {
+    llamadas.add(llamada.method);
+    switch (llamada.method) {
+      case 'isLocationServiceEnabled':
+        return servicioActivo;
+      case 'checkPermission':
+        return permisoActual;
+      case 'requestPermission':
+        return permisoTrasSolicitar;
+      case 'getCurrentPosition':
+        return <String, dynamic>{
+          'latitude': _latSimulada,
+          'longitude': _lngSimulada,
+          'timestamp': DateTime(2026, 10, 17).millisecondsSinceEpoch,
+          'accuracy': 5.0,
+        };
+    }
+    throw PlatformException(
+      code: 'NO_SIMULADO',
+      message: 'La prueba no simula ${llamada.method}',
+    );
+  });
+  addTearDown(() => mensajero.setMockMethodCallHandler(_canalGeolocator, null));
+  return llamadas;
+}
+
+/// Comprueba que Mapa muestra el error de permiso denegado (permiso
+/// denegado también tras solicitarlo): no se pide la posición, no se dibuja
+/// el mapa y por tanto no se descargan teselas.
+Future<void> _comprobarMapaConPermisoDenegado(
+  WidgetTester tester,
+  List<String> llamadas,
+) async {
+  expect(find.byType(MapScreen), findsOneWidget);
+  // Una respuesta del canal simulado por cada paso del flujo.
+  for (var i = 0; i < 4; i++) {
+    await tester.pump();
+  }
+  expect(find.byType(ErrorView), findsOneWidget);
+  expect(find.text(_mensajePermisoDenegado), findsOneWidget);
+  expect(find.byType(FlutterMap), findsNothing);
+  expect(llamadas,
+      ['isLocationServiceEnabled', 'checkPermission', 'requestPermission']);
+}
+
+// PNG transparente de 1×1 píxeles para las teselas de prueba.
+final _pngTransparente = Uint8List.fromList(const [
+  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+  0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+  0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+  0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+]);
+
+/// Proveedor de teselas local para las pruebas: no usa la red, devuelve
+/// una imagen transparente y registra qué teselas pidió el mapa.
+class _TeselasDePrueba extends TileProvider {
+  final pedidas = <TileCoordinates>[];
+
+  @override
+  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
+    pedidas.add(coordinates);
+    return MemoryImage(_pngTransparente);
+  }
+}
 
 /// El PlacesController que registró PlacesBinding al montar la app.
 PlacesController _controller() => Get.find<PlacesController>();
@@ -208,6 +312,7 @@ void main() {
   testWidgets('La barra inferior recorre Inicio, Mapa, Favoritos e Inicio', (
     WidgetTester tester,
   ) async {
+    final llamadasUbicacion = _simularUbicacion();
     await _abrirAppCargada(tester);
 
     // Solo pump(): así se puede comprobar el primer frame de cada pestaña
@@ -231,14 +336,15 @@ void main() {
     expect(indiceActual(), 0);
 
     await tocarPestana('Mapa');
-    expect(find.byType(MapPlaceholderScreen), findsOneWidget);
     expect(find.byType(HomeScreen), findsNothing);
-    expect(find.text('Próximamente: mapa real (Sesión 5)'), findsOneWidget);
+    // Desde la Sesión 5 Mapa es MapScreen: hasta el Paso 3 muestra el error
+    // provisional de permiso denegado en vez del texto del placeholder.
+    await _comprobarMapaConPermisoDenegado(tester, llamadasUbicacion);
     expect(indiceActual(), 1);
 
     await tocarPestana('Favoritos');
     expect(find.byType(FavoritesPlaceholderScreen), findsOneWidget);
-    expect(find.byType(MapPlaceholderScreen), findsNothing);
+    expect(find.byType(MapScreen), findsNothing);
     // Desde la Sesión 4 Favoritos lee el contador del controller compartido.
     expect(find.textContaining('Favoritos marcados: 0.'), findsOneWidget);
     expect(indiceActual(), 2);
@@ -256,6 +362,7 @@ void main() {
   testWidgets('Cambiar de pestaña conserva el controller y sus datos', (
     WidgetTester tester,
   ) async {
+    final llamadasUbicacion = _simularUbicacion();
     await _abrirAppCargada(tester);
     final controller = _controller();
 
@@ -276,6 +383,10 @@ void main() {
 
     await tocarPestana('Mapa');
     expect(find.byType(HomeScreen), findsNothing);
+    await _comprobarMapaConPermisoDenegado(tester, llamadasUbicacion);
+    // El error de posición es independiente del estado de los lugares.
+    expect(controller.estadoPosicion.value, EstadoCarga.error);
+    expect(controller.estado.value, EstadoCarga.exito);
     await tocarPestana('Favoritos');
     expect(find.byType(HomeScreen), findsNothing);
     await tocarPestana('Inicio');
@@ -741,6 +852,7 @@ void main() {
     testWidgets('Las marcas se conservan al cambiar de pestaña', (
       WidgetTester tester,
     ) async {
+      final llamadasUbicacion = _simularUbicacion();
       await _abrirAppCargada(tester);
       final marcado = lugaresEjemplo[0];
       final sinMarcar = lugaresEjemplo[1];
@@ -748,6 +860,7 @@ void main() {
 
       await tocarPestana(tester, 'Mapa');
       expect(find.byType(HomeScreen), findsNothing);
+      await _comprobarMapaConPermisoDenegado(tester, llamadasUbicacion);
       await tocarPestana(tester, 'Favoritos');
       await tocarPestana(tester, 'Inicio');
       // Inicio se reconstruye sin recargar y con las mismas marcas.
@@ -914,6 +1027,472 @@ void main() {
       expect(controller.lugares.map((p) => p.id).toList(), idsLugares);
       expect(controller.esFavorito(favorito), isTrue);
     });
+  });
+
+  group('Flujo de ubicación (Paso 3)', () {
+    testWidgets('Servicio apagado: no consulta permiso ni posición', (
+      WidgetTester tester,
+    ) async {
+      final llamadas = _simularUbicacion(servicioActivo: false);
+      await expectLater(
+        LocationService.obtenerPosicionActual(),
+        throwsA(isA<LocationException>()
+            .having((e) => e.mensaje, 'mensaje', _mensajeUbicacionApagada)),
+      );
+      expect(llamadas, ['isLocationServiceEnabled']);
+    });
+
+    testWidgets('Permiso ya concedido: no lo solicita y obtiene la posición', (
+      WidgetTester tester,
+    ) async {
+      final llamadas = _simularUbicacion(permisoActual: _permisoConcedido);
+      final posicion = await LocationService.obtenerPosicionActual();
+      expect(posicion.latitude, _latSimulada);
+      expect(posicion.longitude, _lngSimulada);
+      expect(llamadas,
+          ['isLocationServiceEnabled', 'checkPermission', 'getCurrentPosition']);
+      expect(llamadas, isNot(contains('requestPermission')));
+    });
+
+    testWidgets('Permiso concedido tras solicitarlo: obtiene la posición', (
+      WidgetTester tester,
+    ) async {
+      final llamadas = _simularUbicacion(
+        permisoActual: _permisoDenegado,
+        permisoTrasSolicitar: _permisoConcedido,
+      );
+      final posicion = await LocationService.obtenerPosicionActual();
+      expect(posicion.latitude, _latSimulada);
+      expect(llamadas, [
+        'isLocationServiceEnabled',
+        'checkPermission',
+        'requestPermission',
+        'getCurrentPosition',
+      ]);
+    });
+
+    testWidgets('Permiso denegado al solicitarlo: no pide la posición', (
+      WidgetTester tester,
+    ) async {
+      final llamadas = _simularUbicacion(
+        permisoActual: _permisoDenegado,
+        permisoTrasSolicitar: _permisoDenegado,
+      );
+      await expectLater(
+        LocationService.obtenerPosicionActual(),
+        throwsA(isA<LocationException>()
+            .having((e) => e.mensaje, 'mensaje', _mensajePermisoDenegado)),
+      );
+      expect(llamadas,
+          ['isLocationServiceEnabled', 'checkPermission', 'requestPermission']);
+      expect(llamadas, isNot(contains('getCurrentPosition')));
+    });
+
+    testWidgets('Permiso bloqueado: no lo solicita ni pide la posición', (
+      WidgetTester tester,
+    ) async {
+      final llamadas = _simularUbicacion(permisoActual: _permisoBloqueado);
+      await expectLater(
+        LocationService.obtenerPosicionActual(),
+        throwsA(isA<LocationException>()
+            .having((e) => e.mensaje, 'mensaje', _mensajePermisoBloqueado)),
+      );
+      expect(llamadas, ['isLocationServiceEnabled', 'checkPermission']);
+      expect(llamadas, isNot(contains('requestPermission')));
+      expect(llamadas, isNot(contains('getCurrentPosition')));
+    });
+
+    testWidgets('El controller guarda la posición y no la vuelve a pedir', (
+      WidgetTester tester,
+    ) async {
+      final llamadas = _simularUbicacion(permisoActual: _permisoConcedido);
+      // Solo el controller, sin MapScreen: así no se dibuja el mapa.
+      await tester.pumpWidget(const GetMaterialApp(home: SizedBox()));
+      final controller = Get.put(PlacesController());
+      await tester.pump(_demoraCarga); // carga simulada de lugares
+      expect(controller.distanciaA(lugaresEjemplo.first), isNull);
+
+      await controller.cargarPosicion();
+      expect(controller.estadoPosicion.value, EstadoCarga.exito);
+      expect(controller.posicion.value?.latitude, _latSimulada);
+      expect(controller.distanciaA(lugaresEjemplo.first), isNotNull);
+      final llamadasTrasPrimera = llamadas.length;
+
+      // Ya tiene la posición: no vuelve a hablar con la plataforma...
+      await controller.cargarPosicion();
+      expect(llamadas.length, llamadasTrasPrimera);
+      // ...salvo que se fuerce (botón Reintentar del Mapa).
+      await controller.cargarPosicion(forzar: true);
+      expect(llamadas.length, greaterThan(llamadasTrasPrimera));
+      expect(llamadas.last, 'getCurrentPosition');
+    });
+
+    testWidgets('Mapa muestra los mensajes de servicio apagado y de bloqueo', (
+      WidgetTester tester,
+    ) async {
+      for (final caso in [
+        (servicio: false, permiso: _permisoConcedido, mensaje: _mensajeUbicacionApagada),
+        (servicio: true, permiso: _permisoBloqueado, mensaje: _mensajePermisoBloqueado),
+      ]) {
+        final llamadas = _simularUbicacion(
+          servicioActivo: caso.servicio,
+          permisoActual: caso.permiso,
+        );
+        await tester.pumpWidget(const ExploraEcApp());
+        await tester.pump(_demoraCarga);
+        await tester.pumpAndSettle();
+        await tester.tap(find.descendant(
+          of: find.byType(BottomNavigationBar),
+          matching: find.text('Mapa'),
+        ));
+        for (var i = 0; i < 4; i++) {
+          await tester.pump();
+        }
+        expect(find.byType(ErrorView), findsOneWidget);
+        expect(find.text(caso.mensaje), findsOneWidget);
+        expect(find.byType(FlutterMap), findsNothing);
+        expect(llamadas, isNot(contains('requestPermission')));
+        expect(llamadas, isNot(contains('getCurrentPosition')));
+        // Siguiente caso con app y controller nuevos.
+        await tester.pumpWidget(const SizedBox());
+        Get.reset();
+      }
+    });
+  });
+
+  group('Mapa con marcadores (Paso 4)', () {
+    late _TeselasDePrueba teselas;
+
+    /// Monta MapScreen con ubicación concedida, la posición simulada y los
+    /// lugares de ejemplo ya cargados. Pantalla alta para que los
+    /// marcadores usados en las pruebas queden visibles con zoom 15.
+    Future<PlacesController> abrirMapa(WidgetTester tester) async {
+      _fijarTamano(tester, 800, alto: 1400);
+      _simularUbicacion(permisoActual: _permisoConcedido);
+      teselas = _TeselasDePrueba();
+      final controller = Get.put(PlacesController());
+      await tester.pumpWidget(
+        GetMaterialApp(home: MapScreen(tileProvider: teselas)),
+      );
+      await tester.pump(_demoraCarga); // posición y carga de lugares
+      await tester.pumpAndSettle();
+      expect(controller.estadoPosicion.value, EstadoCarga.exito);
+      expect(controller.estado.value, EstadoCarga.exito);
+      expect(find.byType(FlutterMap), findsOneWidget);
+      return controller;
+    }
+
+    List<Marker> marcadores(WidgetTester tester) =>
+        tester.widget<MarkerLayer>(find.byType(MarkerLayer)).markers;
+
+    /// Toca el mapa justo en las coordenadas de [punto].
+    Future<void> tocarEn(WidgetTester tester, LatLng punto) async {
+      final mapa = tester.widget<FlutterMap>(find.byType(FlutterMap));
+      final enMapa = mapa.mapController!.camera.latLngToScreenPoint(punto);
+      final esquina = tester.getTopLeft(find.byType(FlutterMap));
+      final tamano = tester.getSize(find.byType(FlutterMap));
+      expect(enMapa.x, inInclusiveRange(0, tamano.width), reason: 'Fuera del mapa');
+      expect(enMapa.y, inInclusiveRange(0, tamano.height), reason: 'Fuera del mapa');
+      await tester.tapAt(esquina + Offset(enMapa.x, enMapa.y));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('Hay un marcador para el usuario y uno por cada lugar', (
+      WidgetTester tester,
+    ) async {
+      final controller = await abrirMapa(tester);
+      final lista = marcadores(tester);
+
+      expect(lista, hasLength(controller.lugares.length + 1));
+      expect(controller.lugares, hasLength(lugaresEjemplo.length));
+
+      // Primero, la posición del usuario con el ícono azul.
+      expect(lista.first.point, const LatLng(_latSimulada, _lngSimulada));
+      final iconoUsuario = lista.first.child as Icon;
+      expect(iconoUsuario.icon, Icons.my_location);
+      expect(iconoUsuario.color, Colors.blue);
+
+      // Después, cada lugar en sus coordenadas y en el mismo orden.
+      for (var i = 0; i < controller.lugares.length; i++) {
+        final lugar = controller.lugares[i];
+        expect(lista[i + 1].point, LatLng(lugar.lat, lugar.lng),
+            reason: lugar.nombre);
+      }
+
+      // Teselas solo del proveedor de prueba: ninguna descarga.
+      expect(tester.widget<TileLayer>(find.byType(TileLayer)).tileProvider,
+          same(teselas));
+      expect(teselas.pedidas, isNotEmpty);
+    });
+
+    testWidgets('Un lugar agregado aparece como marcador nuevo', (
+      WidgetTester tester,
+    ) async {
+      final controller = await abrirMapa(tester);
+      final antes = marcadores(tester).length;
+
+      controller.agregarLugar(Place(
+        id: 'prueba-mapa',
+        nombre: 'Lugar del Mapa',
+        categoria: 'Pruebas',
+        descripcion: 'Lugar sintético creado por la prueba del mapa.',
+        lat: -0.1850,
+        lng: -78.4800,
+      ));
+      await tester.pump();
+
+      final despues = marcadores(tester);
+      expect(despues, hasLength(antes + 1));
+      expect(despues.last.point, const LatLng(-0.1850, -78.4800));
+    });
+
+    testWidgets('Tocar un marcador abre el detalle de ese lugar con su distancia', (
+      WidgetTester tester,
+    ) async {
+      final controller = await abrirMapa(tester);
+      // Café Galletti queda a ~1,5 km al sur de la posición simulada.
+      final lugar = lugaresEjemplo.firstWhere((p) => p.nombre == 'Café Galletti');
+
+      await tocarEn(tester, LatLng(lugar.lat, lugar.lng));
+
+      final detalle = tester.widget<DetailScreen>(find.byType(DetailScreen));
+      expect(detalle.place, same(lugar));
+      expect(detalle.distanciaMetros, controller.distanciaA(lugar));
+      expect(detalle.distanciaMetros, inInclusiveRange(1400, 1550));
+      expect(find.text('A ${formatearDistancia(detalle.distanciaMetros!)} de ti'),
+          findsOneWidget);
+      expect(find.text('A 1.5 km de ti'), findsOneWidget);
+      expect(
+        find.descendant(
+            of: find.byType(DetailScreen), matching: find.text(lugar.descripcion)),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('El marcador de un lugar en tu misma posición también abre su detalle', (
+      WidgetTester tester,
+    ) async {
+      await abrirMapa(tester);
+      // Parque La Carolina coincide con la posición simulada: su marcador
+      // queda encima del marcador del usuario, que no navega.
+      final lugar =
+          lugaresEjemplo.firstWhere((p) => p.nombre == 'Parque La Carolina');
+      expect(LatLng(lugar.lat, lugar.lng), const LatLng(_latSimulada, _lngSimulada));
+
+      await tocarEn(tester, LatLng(lugar.lat, lugar.lng));
+
+      final detalle = tester.widget<DetailScreen>(find.byType(DetailScreen));
+      expect(detalle.place, same(lugar));
+      expect(detalle.distanciaMetros, 0);
+      expect(find.text('A 0 m de ti'), findsOneWidget);
+    });
+
+    testWidgets('Centrar devuelve el mapa a tu posición con zoom 15', (
+      WidgetTester tester,
+    ) async {
+      await abrirMapa(tester);
+      const usuario = LatLng(_latSimulada, _lngSimulada);
+      MapCamera camara() =>
+          tester.widget<FlutterMap>(find.byType(FlutterMap)).mapController!.camera;
+
+      expect(camara().center.latitude, closeTo(usuario.latitude, 1e-9));
+      expect(camara().zoom, 15);
+
+      // La persona arrastra el mapa...
+      await tester.drag(find.byType(FlutterMap), const Offset(-250, 300));
+      await tester.pumpAndSettle();
+      final trasArrastrar = camara().center;
+      expect(trasArrastrar, isNot(usuario));
+      // ...y cambia el zoom.
+      tester
+          .widget<FlutterMap>(find.byType(FlutterMap))
+          .mapController!
+          .move(trasArrastrar, 12);
+      await tester.pumpAndSettle();
+      expect(camara().zoom, 12);
+      final pedidasAntes = teselas.pedidas.length;
+
+      await tester.tap(find.byTooltip('Centrar en mi ubicación'));
+      await tester.pumpAndSettle();
+
+      expect(camara().center.latitude, closeTo(usuario.latitude, 1e-9));
+      expect(camara().center.longitude, closeTo(usuario.longitude, 1e-9));
+      expect(camara().zoom, 15);
+      expect(tester.takeException(), isNull);
+      // Las teselas del nuevo encuadre también salen del proveedor local.
+      expect(teselas.pedidas.length, greaterThan(pedidasAntes));
+    });
+
+    testWidgets('Centrar sin posición disponible no hace nada ni falla', (
+      WidgetTester tester,
+    ) async {
+      // Permiso denegado: no hay posición y el mapa no llega a dibujarse.
+      final llamadas = _simularUbicacion();
+      final controller = Get.put(PlacesController());
+      await tester.pumpWidget(
+        GetMaterialApp(home: MapScreen(tileProvider: _TeselasDePrueba())),
+      );
+      await tester.pump(_demoraCarga);
+      await tester.pumpAndSettle();
+      expect(controller.posicion.value, isNull);
+      expect(find.byType(ErrorView), findsOneWidget);
+      expect(find.byType(FlutterMap), findsNothing);
+      final llamadasAntes = List<String>.of(llamadas);
+
+      await tester.tap(find.byTooltip('Centrar en mi ubicación'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(controller.posicion.value, isNull);
+      expect(find.byType(ErrorView), findsOneWidget);
+      // El botón no vuelve a pedir la ubicación a la plataforma.
+      expect(llamadas, llamadasAntes);
+    });
+  });
+
+  group('Distancia en Inicio (Paso 7B)', () {
+    /// Posición sintética, sin pasar por la plataforma.
+    Position posicionEn(double lat, double lng) => Position(
+          latitude: lat,
+          longitude: lng,
+          timestamp: DateTime(2026, 10, 17),
+          accuracy: 5,
+          altitude: 0,
+          altitudeAccuracy: 0,
+          heading: 0,
+          headingAccuracy: 0,
+          speed: 0,
+          speedAccuracy: 0,
+        );
+
+    Finder distanciaEnTarjeta(Place lugar) => find.descendant(
+          of: find.widgetWithText(PlaceCard, lugar.nombre),
+          matching: find.textContaining(RegExp(r'^A .* de ti$')),
+        );
+
+    /// Abre la app con lugares cargados y una simulación del canal de
+    /// ubicación que registra cualquier llamada nativa (no debe haber).
+    Future<List<String>> abrirInicio(WidgetTester tester, double ancho) async {
+      _fijarTamano(tester, ancho);
+      final llamadas = _simularUbicacion(permisoActual: _permisoConcedido);
+      await _abrirAppCargada(tester);
+      return llamadas;
+    }
+
+    testWidgets('Sin posición las tarjetas no muestran distancia', (
+      WidgetTester tester,
+    ) async {
+      final llamadas = await abrirInicio(tester, 400);
+      expect(_controller().posicion.value, isNull);
+      expect(find.byType(PlaceCard), findsWidgets);
+      expect(find.byIcon(Icons.near_me), findsNothing);
+      expect(find.textContaining(' de ti'), findsNothing);
+      expect(llamadas, isEmpty);
+    });
+
+    testWidgets('Al llegar la posición aparecen las distancias sin recargar', (
+      WidgetTester tester,
+    ) async {
+      final llamadas = await abrirInicio(tester, 400);
+      final controller = _controller();
+      final lugaresAntes = controller.lugares.toList();
+
+      controller.posicion.value = posicionEn(_latSimulada, _lngSimulada);
+      await tester.pump();
+
+      // Mismo controller, mismos objetos Place y sin pasar por la carga.
+      expect(identical(_controller(), controller), isTrue);
+      expect(controller.estado.value, EstadoCarga.exito);
+      expect(find.byType(LoadingView), findsNothing);
+      expect(controller.lugares.length, lugaresAntes.length);
+      for (var i = 0; i < lugaresAntes.length; i++) {
+        expect(controller.lugares[i], same(lugaresAntes[i]));
+      }
+      expect(find.byIcon(Icons.near_me), findsWidgets);
+      expect(distanciaEnTarjeta(lugaresAntes.first), findsOneWidget);
+      // La posición se asignó a mano: ninguna llamada nativa.
+      expect(llamadas, isEmpty);
+
+      // Y si la posición vuelve a faltar, la distancia desaparece.
+      controller.posicion.value = null;
+      await tester.pump();
+      expect(find.byIcon(Icons.near_me), findsNothing);
+    });
+
+    testWidgets('Cada tarjeta muestra la distancia de su lugar, incluido 0 m', (
+      WidgetTester tester,
+    ) async {
+      await abrirInicio(tester, 400);
+      final controller = _controller();
+      // La posición simulada coincide con Parque La Carolina.
+      controller.posicion.value = posicionEn(_latSimulada, _lngSimulada);
+      await tester.pump();
+
+      for (final lugar in controller.lugares) {
+        final tarjeta = find.widgetWithText(PlaceCard, lugar.nombre);
+        await tester.scrollUntilVisible(tarjeta, 200,
+            scrollable: find.byType(Scrollable));
+        final esperado = Geolocator.distanceBetween(
+            _latSimulada, _lngSimulada, lugar.lat, lugar.lng);
+        expect(controller.distanciaA(lugar), esperado, reason: lugar.nombre);
+        expect(
+          find.descendant(
+            of: tarjeta,
+            matching: find.text('A ${formatearDistancia(esperado)} de ti'),
+          ),
+          findsOneWidget,
+          reason: lugar.nombre,
+        );
+      }
+
+      // Dos valores comprobados a mano, no con la misma fórmula.
+      final carolina =
+          controller.lugares.firstWhere((p) => p.nombre == 'Parque La Carolina');
+      final galletti =
+          controller.lugares.firstWhere((p) => p.nombre == 'Café Galletti');
+      await tester.scrollUntilVisible(
+          find.widgetWithText(PlaceCard, carolina.nombre), -200,
+          scrollable: find.byType(Scrollable));
+      expect(
+          find.descendant(
+              of: find.widgetWithText(PlaceCard, carolina.nombre),
+              matching: find.text('A 0 m de ti')),
+          findsOneWidget);
+      await tester.scrollUntilVisible(
+          find.widgetWithText(PlaceCard, galletti.nombre), -200,
+          scrollable: find.byType(Scrollable));
+      expect(
+          find.descendant(
+              of: find.widgetWithText(PlaceCard, galletti.nombre),
+              matching: find.text('A 1.5 km de ti')),
+          findsOneWidget);
+    });
+
+    for (final ancho in [400.0, 599.0, 600.0, 899.0, 900.0, 1000.0]) {
+      testWidgets('A ${ancho.toInt()} px la distancia no desborda ni se anuncia aparte', (
+        WidgetTester tester,
+      ) async {
+        final semantica = tester.ensureSemantics();
+        await abrirInicio(tester, ancho);
+        final controller = _controller();
+        controller.posicion.value = posicionEn(_latSimulada, _lngSimulada);
+        await tester.pump();
+
+        expect(tester.takeException(), isNull,
+            reason: 'Desbordamiento a ${ancho.toInt()} px');
+        expect(find.byIcon(Icons.near_me), findsWidgets);
+
+        // La tarjeta se sigue anunciando una sola vez con su etiqueta, y la
+        // distancia no aparece como un nodo semántico suelto.
+        final lugar = controller.lugares.first;
+        expect(
+          find.bySemanticsLabel('${lugar.nombre}, categoría ${lugar.categoria}'),
+          findsOneWidget,
+        );
+        expect(find.bySemanticsLabel(RegExp('de ti')), findsNothing);
+        semantica.dispose();
+      });
+    }
   });
 
   group('Contador y avisos de PlacesController', () {
