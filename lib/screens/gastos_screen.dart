@@ -1,28 +1,44 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../config/api_config.dart';
+import '../controllers/auth_controller.dart';
 import '../controllers/gastos_controller.dart';
 import '../controllers/places_controller.dart' show EstadoCarga;
 import '../models/gasto.dart';
+import '../services/api_exception.dart';
 import '../theme/app_theme.dart';
 import '../widgets/empty_view.dart';
 import '../widgets/error_view.dart';
 import '../widgets/loading_view.dart';
+import '../widgets/sin_sesion_view.dart';
+import 'gasto_form_screen.dart';
+// Solo lo usan los bloques comentados del Paso 9.
+// ignore_for_file: unused_import
+import 'cambiar_password_screen.dart';
 
-/// Sección «Gastos del viaje» — Sesión 6. Sin sesión muestra el formulario de
-/// correo y contraseña; con sesión, la lista con los mismos 3 estados de la
-/// Sesión 3 (cargando, vacío, error) que ya usa Inicio. Desde la Sesión 7, si
-/// lo que se ve es la copia guardada en Hive, un `MaterialBanner` lo avisa.
+/// Sección «Gastos del viaje» — Sesión 6. Con sesión, la lista con los mismos
+/// 3 estados de la Sesión 3 (cargando, vacío, error) que ya usa Inicio. Desde
+/// la Sesión 7, si lo que se ve es la copia guardada en Hive, un
+/// `MaterialBanner` lo avisa. Desde la Sesión 8, sin sesión se muestra
+/// `SinSesionView` (el formulario vive en `LoginScreen`) y se agrega el CRUD.
 class GastosScreen extends GetView<GastosController> {
   const GastosScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Obx(() => controller.sesionActiva.value ? _buildGastos(context) : _FormularioEntrada(controller: controller));
+    final auth = Get.find<AuthController>();
+    return Obx(() {
+      // Por qué: los gastos son de una persona concreta; sin sesión el servidor
+      // respondería 401. El `Obx` lee `estaAutenticado`, así que la pantalla
+      // cambia sola al iniciar o cerrar sesión.
+      // TODO(sesion-08) Paso 2: descomenta la línea de abajo (pantalla sin sesión).
+      if (!auth.estaAutenticado) return const SinSesionView();
+      return _buildGastos(context, auth);
+    });
   }
 
-  Widget _buildGastos(BuildContext context) {
+  Widget _buildGastos(BuildContext context, AuthController auth) {
     return Scaffold(
       appBar: AppBar(
         title: Obx(() => Text('${'gastos'.tr} (${controller.totalEnServidor.value})')),
@@ -34,24 +50,40 @@ class GastosScreen extends GetView<GastosController> {
           ),
           PopupMenuButton<String>(
             onSelected: (valor) {
-              if (valor == 'salir') controller.salir();
-              if (valor == 'invalidar') controller.invalidarTokenParaPruebas();
+              if (valor == 'salir') auth.cerrarSesion();
+              if (valor == 'invalidar') auth.invalidarTokenParaPruebas();
+              // Por qué: pantalla opcional del Paso 9 (cambiar contraseña).
+              // TODO(sesion-08) OPCIONAL Paso 9: descomenta la línea de abajo (abrir la pantalla).
+              // if (valor == 'password') Get.to(() => const CambiarPasswordScreen());
             },
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: 'salir', child: Text('Cerrar sesión')),
-              PopupMenuItem(value: 'invalidar', child: Text('Invalidar token (solo práctica)')),
+            itemBuilder: (context) => [
+              // TODO(sesion-08) OPCIONAL Paso 9: descomenta la línea de abajo (opción del menú).
+              // const PopupMenuItem(value: 'password', child: Text('Cambiar contraseña')),
+              const PopupMenuItem(value: 'salir', child: Text('Cerrar sesión')),
+              // Solo en modo debug: invalidar el token es una herramienta de práctica.
+              if (kDebugMode)
+                const PopupMenuItem(value: 'invalidar', child: Text('Invalidar token (solo práctica)')),
             ],
           ),
         ],
+      ),
+      // Por qué: el botón «+» abre el formulario vacío para crear un gasto.
+      // TODO(sesion-08) Paso 5: descomenta las 4 líneas de abajo (botón «+»).
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => Get.to(() => const GastoFormScreen()),
+        tooltip: 'Agregar gasto',
+        child: const Icon(Icons.add),
       ),
       body: Obx(() {
         if (controller.estado.value == EstadoCarga.cargando) {
           return const LoadingView(mensaje: 'Cargando gastos...');
         }
         if (controller.estado.value == EstadoCarga.error) {
+          // `iniciar` (no solo `cargarGastos`): el error pudo ser al abrir la
+          // caja del usuario o al pedir las categorías.
           return ErrorView(
             mensaje: controller.mensajeError.value,
-            onReintentar: controller.cargarGastos,
+            onReintentar: controller.iniciar,
           );
         }
         // Por qué: `RefreshIndicator.onRefresh` exige una función que devuelva
@@ -140,71 +172,45 @@ class GastosScreen extends GetView<GastosController> {
         return ListTile(
           title: Text(g.descripcion),
           subtitle: Text('${g.categoria} · ${g.fecha}'),
-          trailing: Text(g.monto.toStringAsFixed(2), style: Theme.of(context).textTheme.titleMedium),
+          // Por qué: tocar una fila abre el mismo formulario, ya relleno.
+          // TODO(sesion-08) Paso 6: descomenta la línea de abajo (tocar para editar).
+          onTap: () => Get.to(() => GastoFormScreen(gasto: g)),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(g.monto.toStringAsFixed(2), style: Theme.of(context).textTheme.titleMedium),
+              // TODO(sesion-08) Paso 6: descomenta las 5 líneas de abajo (botón de eliminar).
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: 'Eliminar',
+                onPressed: () => confirmarEliminar(context, g),
+              ),
+            ],
+          ),
         );
       },
     );
   }
-}
 
-class _FormularioEntrada extends StatefulWidget {
-  final GastosController controller;
-  const _FormularioEntrada({required this.controller});
-
-  @override
-  State<_FormularioEntrada> createState() => _FormularioEntradaState();
-}
-
-class _FormularioEntradaState extends State<_FormularioEntrada> {
-  final _email = TextEditingController();
-  final _password = TextEditingController();
-
-  @override
-  void dispose() {
-    _email.dispose();
-    _password.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = widget.controller;
-    return Scaffold(
-      appBar: AppBar(title: Text('gastos'.tr)),
-      body: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Obx(() => ListView(
-              children: [
-                const Text('Entra para ver los gastos de tu viaje. Si tu correo es nuevo, se crea la cuenta.'),
-                const SizedBox(height: AppSpacing.lg),
-                TextField(
-                  controller: _email,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: 'Correo', border: OutlineInputBorder()),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                TextField(
-                  controller: _password,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Contraseña (8 a 72 caracteres)', border: OutlineInputBorder()),
-                ),
-                const SizedBox(height: AppSpacing.md),
-                if (c.mensajeAuth.value.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                    child: Text(c.mensajeAuth.value, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                  ),
-                FilledButton(
-                  onPressed: c.autenticando.value ? null : () => c.entrar(_email.text.trim(), _password.text),
-                  child: c.autenticando.value
-                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Entrar'),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                Text('Servidor: ${ApiConfig.baseUrl}', style: Theme.of(context).textTheme.bodySmall),
-              ],
-            )),
+  /// Pide confirmación antes de borrar; si el servidor falla, avisa con el
+  /// mensaje que devolvió.
+  Future<void> confirmarEliminar(BuildContext context, Gasto g) async {
+    final confirmado = await showDialog<bool>(
+      context: context,
+      builder: (dialogo) => AlertDialog(
+        title: Text('¿Eliminar "${g.descripcion}"?'),
+        content: const Text('Esta acción no se puede deshacer.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogo, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(dialogo, true), child: const Text('Eliminar')),
+        ],
       ),
     );
+    if (confirmado != true) return;
+    try {
+      await controller.eliminar(g.id);
+    } on ApiException catch (e) {
+      Get.snackbar('No se pudo eliminar', e.mensaje);
+    }
   }
 }

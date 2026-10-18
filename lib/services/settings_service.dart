@@ -31,4 +31,26 @@ class SettingsService {
     Get.updateLocale(nuevo);
     Hive.box(_nombreCaja).put(_claveIdioma, nuevo.languageCode);
   }
+
+  // ---- Sesión 8 (Paso 4): metadato de limpieza ----
+  // Último id de usuario confirmado por `GET /usuarios/me`. Sirve SOLO para
+  // encontrar la caja `gastos_<id>` que hay que borrar si una sesión
+  // restaurada resulta caducada (401) y nadie abrió esa caja. Nunca se usa
+  // para autenticar ni para mostrar gastos. Si la caja `ajustes` no está
+  // abierta (`main()` la abre antes de `runApp`), no se lee ni se guarda.
+  static const _claveUltimoUsuario = 'ultimo_usuario_id';
+
+  static int? get ultimoUsuarioId {
+    if (!Hive.isBoxOpen(_nombreCaja)) return null;
+    final id = Hive.box(_nombreCaja).get(_claveUltimoUsuario);
+    return id is int ? id : null;
+  }
+
+  static Future<void> recordarUltimoUsuario(int id) async {
+    if (Hive.isBoxOpen(_nombreCaja)) await Hive.box(_nombreCaja).put(_claveUltimoUsuario, id);
+  }
+
+  static Future<void> olvidarUltimoUsuario() async {
+    if (Hive.isBoxOpen(_nombreCaja)) await Hive.box(_nombreCaja).delete(_claveUltimoUsuario);
+  }
 }

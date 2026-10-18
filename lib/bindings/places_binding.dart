@@ -4,16 +4,15 @@ import '../controllers/gastos_controller.dart';
 import '../controllers/places_controller.dart';
 
 /// Registra las dependencias que la app necesita desde el arranque —
-/// Sesión 4. Con un solo controller por ahora alcanza un binding simple;
-/// si una sesión futura agrega otro controller (por ejemplo, autenticación
-/// en la Sesión 8), puede sumarse aquí mismo o en un binding propio por
-/// pantalla, según convenga en ese momento — no se anticipa esa estructura
-/// hoy sin necesitarla todavía.
+/// Sesión 4. `ApiClient` y `AuthController` (Sesión 8) NO van aquí: `main()`
+/// los registra antes de `runApp`, como permanentes, porque toda la app
+/// depende de la sesión y `GastosController` los busca al crearse.
 class PlacesBinding extends Bindings {
   @override
   void dependencies() {
     Get.put(PlacesController());
     // Sesión 6: el controller de Gastos se crea la primera vez que se usa.
+    // Sesión 8: `AuthController.cerrarSesion` no lo crea si aún no existe.
     Get.lazyPut(() => GastosController());
   }
 }

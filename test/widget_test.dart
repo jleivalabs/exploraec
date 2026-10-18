@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -11,26 +10,34 @@ import 'package:get/get.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hive/hive.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'package:exploraec/bienvenida_claude_design.dart';
+import 'package:exploraec/controllers/auth_controller.dart';
 import 'package:exploraec/controllers/gastos_controller.dart';
 import 'package:exploraec/controllers/places_controller.dart';
 import 'package:exploraec/main.dart';
 import 'package:exploraec/models/place.dart';
+import 'package:exploraec/repositories/gastos_repository.dart';
 import 'package:exploraec/screens/add_place_screen.dart';
 import 'package:exploraec/screens/detail_screen.dart';
 import 'package:exploraec/screens/favorites_screen.dart';
 import 'package:exploraec/screens/gastos_screen.dart';
 import 'package:exploraec/screens/home_screen.dart';
+import 'package:exploraec/screens/login_screen.dart';
 import 'package:exploraec/screens/map_screen.dart';
+import 'package:exploraec/services/api_client.dart';
+import 'package:exploraec/services/gastos_api_service.dart';
 import 'package:exploraec/services/location_service.dart';
+import 'package:exploraec/services/secure_token_storage.dart';
 import 'package:exploraec/theme/app_theme.dart';
 import 'package:exploraec/widgets/empty_view.dart';
 import 'package:exploraec/widgets/error_view.dart';
 import 'package:exploraec/widgets/loading_view.dart';
 import 'package:exploraec/widgets/place_card.dart';
+import 'package:exploraec/widgets/sin_sesion_view.dart';
+
+import 'helpers/servidor_gastos_falso.dart';
 
 const _subtitulo = 'Descubre y guarda lugares cerca de ti';
 const _mensaje = 'Próximamente exploraremos lugares';
@@ -214,82 +221,103 @@ void _comprobarFavoritos(int cantidad) {
   }
 }
 
-/// Abre la caja `gastos_1` (id que devuelve el `/usuarios/me` simulado) EN
-/// MEMORIA. Desde el Paso 2 cada carga escribe la copia en la caja, y una
-/// escritura real en disco no termina dentro del reloj simulado de
-/// `testWidgets` (`pump()` no la espera). Una caja en memoria no hace E/S,
-/// así que no necesita `runAsync`; `GastosRepository.abrirParaUsuario()`
-/// reutiliza esta caja ya abierta. La escritura en disco la cubre
-/// `gastos_controller_test.dart`.
-Future<void> _abrirCajaDeGastos(WidgetTester tester) async {
-  await Hive.openBox('gastos_1', bytes: Uint8List(0));
-  expect(Hive.isBoxOpen('gastos_1'), isTrue);
-}
+/// Servidor falso de cada prueba (Sesión 8): `setUp` crea uno nuevo con el
+/// usuario `prueba@ejemplo.com` (id 1) sin gastos. Datos sintéticos.
+late ServidorGastosFalso _servidor;
+const _correoPrueba = 'prueba@ejemplo.com';
+const _clavePrueba = 'clave-1234';
 
-/// Backend de gastos simulado para las pruebas de la copia local: responde
-/// registro (correo existente), login y perfil; `/gastos/` devuelve
-/// [gastos] con `X-Total-Count` = [total], o falla sin red / con [fallo].
-MockClient _servidorGastos({
-  List<Map<String, Object>> gastos = const [],
-  int? total,
-  bool sinRed = false,
-  int? fallo,
-}) {
-  return MockClient((req) async {
-    http.Response json(Object cuerpo, int codigo, {Map<String, String> cabeceras = const {}}) =>
-        http.Response(jsonEncode(cuerpo), codigo,
-            headers: {'content-type': 'application/json', ...cabeceras});
-    switch (req.url.path) {
-      case '/usuarios/':
-        return json({'detail': 'El email ya está registrado'}, 400);
-      case '/usuarios/token':
-        return json({'access_token': 'token-sintetico', 'token_type': 'bearer'}, 200);
-      case '/usuarios/me':
-        return json({'id': 1, 'email': 'prueba@ejemplo.com'}, 200);
-      case '/gastos/':
-        if (sinRed) throw const SocketException('sin red');
-        if (fallo != null) return json({'detail': 'x'}, fallo);
-        return json(gastos, 200, cabeceras: {'x-total-count': '${total ?? gastos.length}'});
+/// Repositorio de Gastos para las pruebas de widgets: el real, pero con su
+/// caja `gastos_<id>` en MEMORIA. Cada carga escribe la copia en la caja, y
+/// una escritura real en disco no termina dentro del reloj simulado de
+/// `testWidgets`. Una caja en memoria no admite `deleteFromDisk()`: al
+/// cerrar sesión, Hive ya la cerró y la quitó del registro antes de llegar a
+/// ese paso, así que aquí solo se ignora ese `UnsupportedError`. El borrado
+/// real en disco lo cubren `gastos_controller_test.dart` y la prueba
+/// «Cerrar sesión borra la caja del disco…» de este archivo.
+class _RepositorioEnMemoria extends GastosRepository {
+  _RepositorioEnMemoria(super.api);
+
+  @override
+  Future<bool> abrirParaUsuario(int idUsuario) async {
+    final nombre = 'gastos_$idUsuario';
+    if (!Hive.isBoxOpen(nombre)) await Hive.openBox(nombre, bytes: Uint8List(0));
+    return super.abrirParaUsuario(idUsuario);
+  }
+
+  @override
+  Future<bool> vaciar() async {
+    try {
+      return await super.vaciar();
+    } on UnsupportedError {
+      // Caja en memoria: ya quedó cerrada; no hay archivo que borrar.
+      return true;
     }
-    return json({'detail': 'no existe'}, 404);
-  });
+  }
 }
 
-/// Abre la app, entra en Gastos con [servidor] y espera la lista. Bloquea la
-/// red real durante toda la prueba.
-Future<_SinRed> _entrarEnGastos(WidgetTester tester, MockClient servidor) async {
-  final sinRed = _SinRed();
-  final anterior = HttpOverrides.current;
-  HttpOverrides.global = sinRed;
-  addTearDown(() => HttpOverrides.global = anterior);
+/// Lo que `main()` registra antes de `runApp` (Sesión 8), sobre el servidor
+/// falso y con el almacenamiento seguro simulado en memoria; y el controller
+/// de Gastos (el `lazyPut` de `PlacesBinding` respeta este registro previo).
+void _registrarSesion() {
+  FlutterSecureStorage.setMockInitialValues({});
+  Get.put<ApiClient>(ApiClient(dio: _servidor.crearDio()), permanent: true);
+  Get.put<AuthController>(AuthController(), permanent: true);
+  Get.lazyPut<GastosController>(() =>
+      GastosController(repositorio: _RepositorioEnMemoria(GastosApiService(Get.find<ApiClient>()))));
+}
 
-  await _abrirAppCargada(tester);
+Future<void> _irAGastos(WidgetTester tester) async {
   await tester.tap(find.descendant(
     of: find.byType(BottomNavigationBar),
     matching: find.text('Gastos'),
   ));
   await tester.pump();
-  await tester.enterText(find.widgetWithText(TextField, 'Correo'), 'prueba@ejemplo.com');
-  await tester.enterText(
-      find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'), 'clave-1234');
-  await _abrirCajaDeGastos(tester);
-  await http.runWithClient(() async {
-    await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
-    await tester.pump();
-    await tester.pump();
-  }, () => servidor);
-  await tester.pumpAndSettle();
-  expect(Get.find<GastosController>().sesionActiva.value, isTrue);
+}
+
+/// Bloquea la red real durante la prueba: cualquier conexión la contaría.
+_SinRed _bloquearRedReal() {
+  final sinRed = _SinRed();
+  final anterior = HttpOverrides.current;
+  HttpOverrides.global = sinRed;
+  addTearDown(() => HttpOverrides.global = anterior);
   return sinRed;
 }
 
-/// Toca [boton] y deja que la carga que dispara use [servidor].
-Future<void> _tocarConServidor(WidgetTester tester, Finder boton, MockClient servidor) async {
-  await http.runWithClient(() async {
-    await tester.tap(boton);
-    await tester.pump();
-    await tester.pump();
-  }, () => servidor);
+/// Con la app ya en Gastos (sin sesión): «Iniciar sesión» → formulario →
+/// «Entrar» con [clave]. Deja la pantalla asentada.
+Future<void> _iniciarSesionDesdeLaPantalla(WidgetTester tester, {String clave = _clavePrueba}) async {
+  await tester.tap(find.widgetWithText(FilledButton, 'Iniciar sesión'));
+  await tester.pumpAndSettle();
+  expect(find.byType(LoginScreen), findsOneWidget);
+  await tester.enterText(find.widgetWithText(TextFormField, 'Correo'), _correoPrueba);
+  await tester.enterText(find.widgetWithText(TextFormField, 'Contraseña'), clave);
+  await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
+  await tester.pumpAndSettle();
+}
+
+/// Abre la app, entra en Gastos con el usuario de prueba (con [gastos] y
+/// [total] en el servidor) y espera la lista.
+Future<_SinRed> _entrarEnGastos(WidgetTester tester,
+    {List<Map<String, dynamic>> gastos = const [], int? total}) async {
+  final sinRed = _bloquearRedReal();
+  _servidor.usuarios[_correoPrueba]!
+    ..gastos = List.of(gastos)
+    ..total = total;
+  await _abrirAppCargada(tester);
+  await _irAGastos(tester);
+  expect(find.byType(SinSesionView), findsOneWidget);
+  await _iniciarSesionDesdeLaPantalla(tester);
+  expect(Get.find<AuthController>().estaAutenticado, isTrue);
+  expect(find.byType(LoginScreen), findsNothing);
+  return sinRed;
+}
+
+/// Toca [boton] y deja que termine la carga que dispara.
+Future<void> _tocarYEsperar(WidgetTester tester, Finder boton) async {
+  await tester.tap(boton);
+  await tester.pump();
+  await tester.pump();
   await tester.pumpAndSettle();
 }
 
@@ -374,6 +402,14 @@ void main() {
     if (carpetaHive.existsSync()) carpetaHive.deleteSync(recursive: true);
   });
 
+  // Sesión 8: `ExploraEcApp` necesita `ApiClient` y `AuthController` (los
+  // registra `main()`, no la app). Cada prueba parte de un servidor falso
+  // nuevo y del almacenamiento seguro vacío: no hay sesión ni token heredado.
+  setUp(() {
+    _servidor = ServidorGastosFalso({_correoPrueba: UsuarioFalso(id: 1, password: _clavePrueba)});
+    _registrarSesion();
+  });
+
   // Dos estados globales que sobreviven entre pruebas y se limpian tras
   // cada una:
   // - lugaresEjemplo, la lista en memoria (agregar lugares la modifica);
@@ -387,7 +423,7 @@ void main() {
     // El idioma elegido en una prueba no pasa a la siguiente: sin
     // preferencia guardada, cada prueba arranca en español.
     await Hive.box('ajustes').clear();
-    // `gastos_1` suele ser una caja en memoria (ver `_abrirCajaDeGastos`):
+    // `gastos_1` suele ser una caja en memoria (ver `_RepositorioEnMemoria`):
     // basta cerrarla para descartarla. La prueba de «Cerrar sesión» la usa en
     // disco (dentro de `carpetaHive`) y la borra ella misma; si fallara a
     // medias, cerrarla aquí también basta: `tearDownAll` borra la carpeta.
@@ -1100,6 +1136,7 @@ void main() {
       // en memoria vuelve a la inicial (el lugar propio no se guarda en Hive).
       await tester.pumpWidget(const SizedBox.shrink());
       Get.reset();
+      _registrarSesion();
       lugaresEjemplo
         ..clear()
         ..addAll(lugaresOriginales);
@@ -1281,6 +1318,7 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       Get.reset();
       Get.locale = null;
+      _registrarSesion();
       await _abrirAppCargada(tester);
     }
 
@@ -1789,7 +1827,7 @@ void main() {
     }
   });
 
-  group('Gastos (Sesión 6, Paso 5)', () {
+  group('Gastos (Sesión 6, Paso 5 → Sesión 8, Paso 2)', () {
     testWidgets('La barra tiene 4 pestañas fijas y la cuarta es Gastos', (
       WidgetTester tester,
     ) async {
@@ -1801,11 +1839,7 @@ void main() {
           ['Inicio', 'Mapa', 'Favoritos', 'Gastos']);
       expect((barra.items.last.icon as Icon).icon, Icons.receipt_long);
 
-      await tester.tap(find.descendant(
-        of: find.byType(BottomNavigationBar),
-        matching: find.text('Gastos'),
-      ));
-      await tester.pump();
+      await _irAGastos(tester);
       expect(find.byType(GastosScreen), findsOneWidget);
       expect(find.byType(HomeScreen), findsNothing);
       expect(
@@ -1815,72 +1849,47 @@ void main() {
       );
     });
 
+    testWidgets('Sin sesión, Gastos pide iniciar sesión sin llamar al servidor', (
+      WidgetTester tester,
+    ) async {
+      final sinRed = _bloquearRedReal();
+      await _abrirAppCargada(tester);
+      await _irAGastos(tester);
+      expect(find.byType(SinSesionView), findsOneWidget);
+      expect(find.text('Inicia sesión para ver los gastos de tu viaje.'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Iniciar sesión'), findsOneWidget);
+      expect(find.byTooltip('Recargar'), findsNothing);
+      expect(_servidor.peticiones, isEmpty);
+      expect(sinRed.intentos, 0);
+    });
+
     testWidgets('Entrar con datos válidos completa el flujo y muestra los gastos', (
       WidgetTester tester,
     ) async {
-      // Red real bloqueada: cualquier conexión de verdad haría fallar la prueba.
-      final sinRed = _SinRed();
-      final anterior = HttpOverrides.current;
-      HttpOverrides.global = sinRed;
-      addTearDown(() => HttpOverrides.global = anterior);
-
-      // Backend simulado (contrato del Paso 4), sin servidor real.
-      final rutas = <String>[];
-      final servidor = MockClient((req) async {
-        rutas.add('${req.method} ${req.url.path}');
-        http.Response json(Object cuerpo, int codigo,
-                {Map<String, String> cabeceras = const {}}) =>
-            http.Response(jsonEncode(cuerpo), codigo,
-                headers: {'content-type': 'application/json', ...cabeceras});
-        switch (req.url.path) {
-          case '/usuarios/':
-            return json({'detail': 'El email ya está registrado'}, 400);
-          case '/usuarios/token':
-            return json({'access_token': 'token-sintetico', 'token_type': 'bearer'}, 200);
-          case '/usuarios/me':
-            return json({'id': 1, 'email': 'prueba@ejemplo.com'}, 200);
-          case '/gastos/':
-            return json([
-              {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-17'},
-              {'id': 2, 'descripcion': 'Taxi al Panecillo', 'monto': 4, 'categoria': 'transporte', 'fecha': '2026-10-17'},
-            ], 200, cabeceras: {'x-total-count': '2'});
-        }
-        return json({'detail': 'no existe'}, 404);
-      });
-
+      final sinRed = _bloquearRedReal();
+      _servidor.usuarios[_correoPrueba]!.gastos = [
+        {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-17'},
+        {'id': 2, 'descripcion': 'Taxi al Panecillo', 'monto': 4, 'categoria': 'transporte', 'fecha': '2026-10-17'},
+      ];
       await _abrirAppCargada(tester);
-      await tester.tap(find.descendant(
-        of: find.byType(BottomNavigationBar),
-        matching: find.text('Gastos'),
-      ));
-      await tester.pump();
+      await _irAGastos(tester);
 
-      // Sin sesión: formulario de entrada.
-      final controller = Get.find<GastosController>();
-      expect(controller.sesionActiva.value, isFalse);
-      expect(find.widgetWithText(TextField, 'Correo'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Iniciar sesión'));
+      await tester.pumpAndSettle();
       expect(find.text('Servidor: http://10.0.2.2:8000'), findsOneWidget);
-
-      await tester.enterText(
-          find.widgetWithText(TextField, 'Correo'), 'prueba@ejemplo.com');
-      await tester.enterText(
-          find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'),
-          'clave-1234');
-      await _abrirCajaDeGastos(tester);
-      // El toque (y todo el flujo async que dispara) usa el backend simulado.
-      await http.runWithClient(() async {
-        await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
-        await tester.pump();
-        await tester.pump();
-      }, () => servidor);
+      await tester.enterText(find.widgetWithText(TextFormField, 'Correo'), _correoPrueba);
+      await tester.enterText(find.widgetWithText(TextFormField, 'Contraseña'), _clavePrueba);
+      await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
       await tester.pumpAndSettle();
 
-      expect(rutas, ['POST /usuarios/', 'POST /usuarios/token', 'GET /usuarios/me', 'GET /gastos/']);
-      expect(controller.sesionActiva.value, isTrue);
-      expect(controller.autenticando.value, isFalse);
-      expect(find.text('Pendiente: conecta el flujo en el Paso 7'), findsNothing);
-      // La pantalla cambió del formulario a la lista con los 3 estados.
-      expect(find.widgetWithText(TextField, 'Correo'), findsNothing);
+      final auth = Get.find<AuthController>();
+      expect(_servidor.rutas,
+          ['POST /usuarios/token', 'GET /usuarios/me', 'GET /gastos/categorias', 'GET /gastos/']);
+      expect(auth.estaAutenticado, isTrue);
+      expect(auth.cargando.value, isFalse);
+      // De vuelta en Gastos (el formulario se cerró) con la lista y sus estados.
+      expect(find.byType(LoginScreen), findsNothing);
+      expect(find.byType(SinSesionView), findsNothing);
       expect(find.text('Gastos (2)'), findsOneWidget);
       expect(find.text('Almuerzo en el Mercado Central'), findsOneWidget);
       expect(find.text('6.50'), findsOneWidget);
@@ -1890,81 +1899,53 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('Contraseña incorrecta: el mensaje del servidor aparece bajo el formulario', (
+      WidgetTester tester,
+    ) async {
+      _bloquearRedReal();
+      await _abrirAppCargada(tester);
+      await _irAGastos(tester);
+      await _iniciarSesionDesdeLaPantalla(tester, clave: 'otra-clave-1');
+
+      expect(find.byType(LoginScreen), findsOneWidget, reason: 'El formulario sigue abierto');
+      expect(find.text('Email o contraseña incorrectos'), findsOneWidget);
+      expect(Get.find<AuthController>().estaAutenticado, isFalse);
+      expect(_servidor.rutas, ['POST /usuarios/token']);
+      expect(await SecureTokenStorage().leer(), isNull);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('Deslizar hacia abajo vuelve a pedir la primera página y actualiza la lista', (
       WidgetTester tester,
     ) async {
-      final sinRed = _SinRed();
-      final anterior = HttpOverrides.current;
-      HttpOverrides.global = sinRed;
-      addTearDown(() => HttpOverrides.global = anterior);
+      final sinRed = await _entrarEnGastos(tester, gastos: [
+        {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
+      ]);
 
-      // Backend simulado: la segunda consulta trae un gasto nuevo, como si
-      // se hubiera registrado mientras tanto.
-      final consultas = <Map<String, String>>[];
-      final servidor = MockClient((req) async {
-        http.Response json(Object cuerpo, int codigo,
-                {Map<String, String> cabeceras = const {}}) =>
-            http.Response(jsonEncode(cuerpo), codigo,
-                headers: {'content-type': 'application/json', ...cabeceras});
-        switch (req.url.path) {
-          case '/usuarios/':
-            return json({'detail': 'El email ya está registrado'}, 400);
-          case '/usuarios/token':
-            return json({'access_token': 'token-sintetico', 'token_type': 'bearer'}, 200);
-          case '/usuarios/me':
-            return json({'id': 1, 'email': 'prueba@ejemplo.com'}, 200);
-          case '/gastos/':
-            consultas.add(req.url.queryParameters);
-            final gastos = [
-              {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
-              if (consultas.length > 1)
-                {'id': 2, 'descripcion': 'Café en La Ronda', 'monto': 2.75, 'categoria': 'comida', 'fecha': '2026-10-18'},
-            ];
-            return json(gastos, 200, cabeceras: {'x-total-count': '${gastos.length}'});
-        }
-        return json({'detail': 'no existe'}, 404);
-      });
+      // Primera carga: un solo gasto, la lista no llena la pantalla.
+      expect(_servidor.consultasDeListado, [
+        {'skip': '0', 'limit': '20'}
+      ]);
+      expect(find.text('Gastos (1)'), findsOneWidget);
+      expect(find.text('Café en La Ronda'), findsNothing);
+      expect(find.byType(RefreshIndicator), findsOneWidget);
+      final lista = tester.widget<ListView>(find.descendant(
+          of: find.byType(RefreshIndicator), matching: find.byType(ListView)));
+      expect(lista.physics, isA<AlwaysScrollableScrollPhysics>());
 
-      await _abrirAppCargada(tester);
-      await tester.tap(find.descendant(
-        of: find.byType(BottomNavigationBar),
-        matching: find.text('Gastos'),
-      ));
-      await tester.pump();
-      await tester.enterText(
-          find.widgetWithText(TextField, 'Correo'), 'prueba@ejemplo.com');
-      await tester.enterText(
-          find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'),
-          'clave-1234');
+      // Mientras tanto se registró otro gasto en el servidor.
+      _servidor.usuarios[_correoPrueba]!.gastos.add(
+          {'id': 2, 'descripcion': 'Café en La Ronda', 'monto': 2.75, 'categoria': 'comida', 'fecha': '2026-10-18'});
 
-      await _abrirCajaDeGastos(tester);
-      await http.runWithClient(() async {
-        await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
-        await tester.pump();
-        await tester.pump();
-        await tester.pumpAndSettle();
-
-        // Primera carga: un solo gasto, la lista no llena la pantalla.
-        expect(consultas, [
-          {'skip': '0', 'limit': '20'}
-        ]);
-        expect(find.text('Gastos (1)'), findsOneWidget);
-        expect(find.text('Café en La Ronda'), findsNothing);
-        expect(find.byType(RefreshIndicator), findsOneWidget);
-        final lista = tester.widget<ListView>(find.descendant(
-            of: find.byType(RefreshIndicator), matching: find.byType(ListView)));
-        expect(lista.physics, isA<AlwaysScrollableScrollPhysics>());
-
-        // Gesto: deslizar la lista hacia abajo desde el primer gasto.
-        await tester.fling(
-            find.text('Almuerzo en el Mercado Central'), const Offset(0, 400), 1500);
-        await tester.pump(); // arranca la recarga
-        await tester.pump(const Duration(seconds: 1)); // animación del indicador
-        await tester.pumpAndSettle();
-      }, () => servidor);
+      // Gesto: deslizar la lista hacia abajo desde el primer gasto.
+      await tester.fling(
+          find.text('Almuerzo en el Mercado Central'), const Offset(0, 400), 1500);
+      await tester.pump(); // arranca la recarga
+      await tester.pump(const Duration(seconds: 1)); // animación del indicador
+      await tester.pumpAndSettle();
 
       // Se pidió otra vez la primera página y la lista se actualizó.
-      expect(consultas, [
+      expect(_servidor.consultasDeListado, [
         {'skip': '0', 'limit': '20'},
         {'skip': '0', 'limit': '20'},
       ]);
@@ -1979,23 +1960,144 @@ void main() {
       expect(sinRed.intentos, 0, reason: 'No debe abrirse ninguna conexión real');
       expect(tester.takeException(), isNull);
     });
-  });
 
-  group('Cerrar sesión en Gastos (Sesión 7, Paso 5)', () {
-    // Esta prueba NO usa `_abrirCajaDeGastos` (caja en memoria): una caja en
-    // memoria no admite `deleteFromDisk()`, que es justo lo que hace
-    // «Cerrar sesión». Aquí `GastosRepository` abre `gastos_1` en disco, en
-    // la carpeta temporal de este archivo. La E/S de disco no avanza dentro
-    // del reloj simulado, así que `entrar` y `salir` se ejecutan con
-    // `tester.runAsync` (zona real) y después `pump` muestra el resultado en
-    // pantalla. No se cambia nada del código de producción.
-    testWidgets('Cerrar sesión borra la caja del disco, conserva favoritos y vuelve al formulario', (
+    testWidgets('Cerrar sesión desde el menú vuelve a «sin sesión» y no deja nada a la vista', (
       WidgetTester tester,
     ) async {
-      final sinRed = _SinRed();
-      final anterior = HttpOverrides.current;
-      HttpOverrides.global = sinRed;
-      addTearDown(() => HttpOverrides.global = anterior);
+      await _entrarEnGastos(tester, gastos: [
+        {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
+      ]);
+      final controller = Get.find<GastosController>();
+      expect(Hive.isBoxOpen('gastos_1'), isTrue);
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      expect(find.text('Invalidar token (solo práctica)'), findsOneWidget, reason: 'Modo debug');
+      await tester.tap(find.text('Cerrar sesión'));
+      await tester.pumpAndSettle();
+
+      final auth = Get.find<AuthController>();
+      expect(find.byType(SinSesionView), findsOneWidget);
+      expect(find.text('Almuerzo en el Mercado Central'), findsNothing);
+      expect(auth.estaAutenticado, isFalse);
+      expect(auth.avisoSesion.value, isEmpty, reason: 'Todo se borró: no hay aviso de fallo');
+      expect(Get.find<ApiClient>().token, isNull);
+      expect(await SecureTokenStorage().leer(), isNull);
+      expect(controller.gastos, isEmpty);
+      expect(controller.totalEnServidor.value, 0);
+      expect(Hive.isBoxOpen('gastos_1'), isFalse);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Paso 5: si el servidor rechaza el gasto, el formulario sigue abierto con sus valores', (
+      WidgetTester tester,
+    ) async {
+      await _entrarEnGastos(tester, gastos: [
+        {'id': 1, 'descripcion': 'Cena grande', 'monto': 450, 'categoria': 'comida', 'fecha': '2026-10-18'},
+      ]);
+      await tester.tap(find.byTooltip('Agregar gasto'));
+      await tester.pumpAndSettle();
+      expect(find.text('Nuevo gasto'), findsOneWidget);
+
+      await tester.enterText(find.widgetWithText(TextFormField, 'Descripción'), 'Otra cena');
+      await tester.enterText(find.widgetWithText(TextFormField, 'Monto'), '100');
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('comida').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Guardar'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Nuevo gasto'), findsOneWidget, reason: 'El formulario no se cierra');
+      expect(find.textContaining('supera el límite de 500.0'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Otra cena'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '100'), findsOneWidget);
+      expect(_servidor.usuarios[_correoPrueba]!.gastos, hasLength(1));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Paso 6: tocar un gasto abre el formulario con sus valores y PATCH envía solo el cambio', (
+      WidgetTester tester,
+    ) async {
+      await _entrarEnGastos(tester, gastos: [
+        {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
+      ]);
+      await tester.tap(find.text('Almuerzo en el Mercado Central'));
+      await tester.pumpAndSettle();
+      expect(find.text('Editar gasto'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Almuerzo en el Mercado Central'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '6.5'), findsOneWidget);
+
+      await tester.enterText(find.widgetWithText(TextFormField, '6.5'), '7.00');
+      await tester.tap(find.widgetWithText(FilledButton, 'Guardar cambios'));
+      await tester.pumpAndSettle();
+
+      final patch = _servidor.peticiones.singleWhere((p) => p.metodo == 'PATCH');
+      expect(patch.cuerpo, '{"monto":7.0}');
+      expect(find.text('Editar gasto'), findsNothing);
+      expect(find.text('7.00'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Paso 6: eliminar pide confirmación; Cancelar no envía DELETE y Eliminar sí', (
+      WidgetTester tester,
+    ) async {
+      await _entrarEnGastos(tester, gastos: [
+        {'id': 1, 'descripcion': 'Taxi al Panecillo', 'monto': 4, 'categoria': 'transporte', 'fecha': '2026-10-18'},
+      ]);
+      await tester.tap(find.byTooltip('Eliminar'));
+      await tester.pumpAndSettle();
+      expect(find.text('¿Eliminar "Taxi al Panecillo"?'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancelar'));
+      await tester.pumpAndSettle();
+      expect(_servidor.peticiones.where((p) => p.metodo == 'DELETE'), isEmpty);
+      expect(find.text('Taxi al Panecillo'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Eliminar'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Eliminar'));
+      await tester.pumpAndSettle();
+      expect(_servidor.rutas.where((r) => r == 'DELETE /gastos/1'), hasLength(1));
+      expect(find.text('Taxi al Panecillo'), findsNothing);
+      expect(find.byType(EmptyView), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Paso 6: un 404 al eliminar avisa con el mensaje y actualiza la lista', (
+      WidgetTester tester,
+    ) async {
+      await _entrarEnGastos(tester, gastos: [
+        {'id': 1, 'descripcion': 'Taxi al Panecillo', 'monto': 4, 'categoria': 'transporte', 'fecha': '2026-10-18'},
+      ]);
+      _servidor.usuarios[_correoPrueba]!.gastos.clear(); // lo borraron desde otro lado
+      await tester.tap(find.byTooltip('Eliminar'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Eliminar'));
+      await tester.pump(); // cierra el diálogo y procesa DELETE (404) + recarga
+      await tester.pump(const Duration(milliseconds: 500)); // entra el aviso
+      expect(find.text('El gasto 1 no existe'), findsOneWidget);
+      expect(find.text('Taxi al Panecillo'), findsNothing);
+      await tester.pumpAndSettle(const Duration(seconds: 5)); // cierra el aviso
+    });
+  });
+
+  group('Cerrar sesión en Gastos (Sesión 7, Paso 5 → AuthController)', () {
+    // Esta prueba usa el repositorio REAL (caja en disco, dentro de la carpeta
+    // temporal de este archivo), no `_RepositorioEnMemoria`. La E/S de disco
+    // no avanza dentro del reloj simulado, así que el inicio y el cierre de
+    // sesión se ejecutan con `tester.runAsync` (zona real) y después `pump`
+    // muestra el resultado. La opción del menú ya se probó arriba.
+    testWidgets('Cerrar sesión borra la caja del disco, conserva favoritos y vuelve a «sin sesión»', (
+      WidgetTester tester,
+    ) async {
+      final sinRed = _bloquearRedReal();
+      await Get.delete<GastosController>();
+      Get.lazyPut<GastosController>(() => GastosController());
+      _servidor.usuarios[_correoPrueba]!
+        ..gastos = [
+          {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
+        ]
+        ..total = 45;
       final archivoGastos =
           File('${carpetaHive.path}${Platform.pathSeparator}gastos_1.hive');
 
@@ -2005,43 +2107,24 @@ void main() {
       _controller().alternarFavorito(favorito);
       await tester.pump();
 
-      await tester.tap(find.descendant(
-        of: find.byType(BottomNavigationBar),
-        matching: find.text('Gastos'),
-      ));
-      await tester.pump();
+      await _irAGastos(tester);
       final controller = Get.find<GastosController>();
-      await tester.enterText(find.widgetWithText(TextField, 'Correo'), 'prueba@ejemplo.com');
-      await tester.enterText(
-          find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'), 'clave-1234');
-
-      // Lo mismo que hace el botón «Entrar» (probado arriba con caja en
-      // memoria), pero en la zona real para que Hive abra y escriba en disco.
-      await tester.runAsync(() => http.runWithClient(
-            () => controller.entrar('prueba@ejemplo.com', 'clave-1234'),
-            () => _servidorGastos(gastos: [
-              {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
-            ], total: 45),
-          ));
+      final auth = Get.find<AuthController>();
+      await tester.runAsync(() async {
+        await auth.iniciarSesion(_correoPrueba, _clavePrueba);
+        await controller.cargaInicial;
+      });
       await tester.pumpAndSettle();
-      expect(controller.sesionActiva.value, isTrue);
+      expect(auth.estaAutenticado, isTrue);
       expect(find.text('Almuerzo en el Mercado Central'), findsOneWidget);
       expect(Hive.isBoxOpen('gastos_1'), isTrue);
       expect(archivoGastos.existsSync(), isTrue);
 
-      // El menú «⋮» de Gastos ofrece «Cerrar sesión»; su acción es
-      // `controller.salir()`, que se ejecuta en la zona real (borra en disco).
-      await tester.tap(find.byType(PopupMenuButton<String>));
-      await tester.pumpAndSettle();
-      expect(find.text('Cerrar sesión'), findsOneWidget);
-      await tester.tapAt(Offset.zero); // cierra el menú sin elegir nada
-      await tester.pumpAndSettle();
-      expect(controller.sesionActiva.value, isTrue);
-      await tester.runAsync(controller.salir);
+      expect(await tester.runAsync(auth.cerrarSesion), isTrue);
       await tester.pumpAndSettle();
 
-      // De vuelta al formulario, sin rastro de los gastos ni de su caja.
-      expect(find.widgetWithText(TextField, 'Correo'), findsOneWidget);
+      // De vuelta a «sin sesión», sin rastro de los gastos ni de su caja.
+      expect(find.byType(SinSesionView), findsOneWidget);
       expect(find.text('Almuerzo en el Mercado Central'), findsNothing);
       expect(archivoGastos.existsSync(), isFalse);
       expect(controller.gastos, isEmpty);
@@ -2059,7 +2142,7 @@ void main() {
   });
 
   group('Copia local en Gastos (Sesión 7, Paso 2)', () {
-    final dos = <Map<String, Object>>[
+    final dos = <Map<String, dynamic>>[
       {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
       {'id': 2, 'descripcion': 'Taxi al Panecillo', 'monto': 4, 'categoria': 'transporte', 'fecha': '2026-10-18'},
     ];
@@ -2067,10 +2150,11 @@ void main() {
     testWidgets('Sin conexión: banner con última sincronización; Reintentar lo quita', (
       WidgetTester tester,
     ) async {
-      final sinRed = await _entrarEnGastos(tester, _servidorGastos(gastos: dos));
+      final sinRed = await _entrarEnGastos(tester, gastos: dos);
       expect(find.byType(MaterialBanner), findsNothing);
 
-      await _tocarConServidor(tester, find.byTooltip('Recargar'), _servidorGastos(sinRed: true));
+      _servidor.sinRedAlListar = true;
+      await _tocarYEsperar(tester, find.byTooltip('Recargar'));
       final controller = Get.find<GastosController>();
       expect(controller.desdeCache.value, isTrue);
       expect(find.byType(MaterialBanner), findsOneWidget);
@@ -2090,8 +2174,8 @@ void main() {
       );
 
       // Con el servidor de vuelta, «Reintentar» recarga y el banner se va.
-      await _tocarConServidor(
-          tester, find.widgetWithText(TextButton, 'Reintentar'), _servidorGastos(gastos: dos));
+      _servidor.sinRedAlListar = false;
+      await _tocarYEsperar(tester, find.widgetWithText(TextButton, 'Reintentar'));
       expect(controller.desdeCache.value, isFalse);
       expect(find.byType(MaterialBanner), findsNothing);
       expect(find.text('Gastos (2)'), findsOneWidget);
@@ -2102,16 +2186,16 @@ void main() {
     testWidgets('Deslizar con el servidor de vuelta también quita el banner', (
       WidgetTester tester,
     ) async {
-      await _entrarEnGastos(tester, _servidorGastos(gastos: dos));
-      await _tocarConServidor(tester, find.byTooltip('Recargar'), _servidorGastos(fallo: 503));
+      await _entrarEnGastos(tester, gastos: dos);
+      _servidor.falloListar = 503;
+      await _tocarYEsperar(tester, find.byTooltip('Recargar'));
       expect(find.byType(MaterialBanner), findsOneWidget);
 
-      await http.runWithClient(() async {
-        await tester.fling(
-            find.text('Almuerzo en el Mercado Central'), const Offset(0, 400), 1500);
-        await tester.pump();
-        await tester.pump(const Duration(seconds: 1));
-      }, () => _servidorGastos(gastos: dos));
+      _servidor.falloListar = null;
+      await tester.fling(
+          find.text('Almuerzo en el Mercado Central'), const Offset(0, 400), 1500);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
       expect(Get.find<GastosController>().desdeCache.value, isFalse);
       expect(find.byType(MaterialBanner), findsNothing);
@@ -2121,11 +2205,12 @@ void main() {
       WidgetTester tester,
     ) async {
       // 2 gastos a la vista de 45 en el servidor: hay más páginas.
-      await _entrarEnGastos(tester, _servidorGastos(gastos: dos, total: 45));
+      await _entrarEnGastos(tester, gastos: dos, total: 45);
       expect(find.text('Gastos (45)'), findsOneWidget);
       expect(find.widgetWithText(OutlinedButton, 'Cargar más'), findsOneWidget);
 
-      await _tocarConServidor(tester, find.byTooltip('Recargar'), _servidorGastos(sinRed: true));
+      _servidor.sinRedAlListar = true;
+      await _tocarYEsperar(tester, find.byTooltip('Recargar'));
       expect(find.textContaining(_textoCopia), findsOneWidget);
       expect(find.textContaining('Copia parcial: 2 de 45 gastos guardados.'), findsOneWidget);
       expect(find.widgetWithText(OutlinedButton, 'Cargar más'), findsNothing);
@@ -2135,11 +2220,12 @@ void main() {
     testWidgets('Copia vacía: EmptyView con el banner', (
       WidgetTester tester,
     ) async {
-      await _entrarEnGastos(tester, _servidorGastos());
+      await _entrarEnGastos(tester);
       expect(find.byType(EmptyView), findsOneWidget);
       expect(find.byType(MaterialBanner), findsNothing);
 
-      await _tocarConServidor(tester, find.byTooltip('Recargar'), _servidorGastos(sinRed: true));
+      _servidor.sinRedAlListar = true;
+      await _tocarYEsperar(tester, find.byTooltip('Recargar'));
       expect(find.byType(EmptyView), findsOneWidget);
       expect(find.byType(ErrorView), findsNothing);
       expect(find.byType(MaterialBanner), findsOneWidget);
@@ -2150,7 +2236,8 @@ void main() {
     testWidgets('Sin copia guardada, el fallo sigue mostrando ErrorView', (
       WidgetTester tester,
     ) async {
-      await _entrarEnGastos(tester, _servidorGastos(sinRed: true));
+      _servidor.sinRedAlListar = true;
+      await _entrarEnGastos(tester);
       expect(find.byType(ErrorView), findsOneWidget);
       expect(find.byType(MaterialBanner), findsNothing);
     });
@@ -2158,10 +2245,10 @@ void main() {
     testWidgets('Fallo de «Cargar más»: aviso junto al botón y la lista intacta', (
       WidgetTester tester,
     ) async {
-      await _entrarEnGastos(tester, _servidorGastos(gastos: dos, total: 45));
+      await _entrarEnGastos(tester, gastos: dos, total: 45);
 
-      await _tocarConServidor(tester, find.widgetWithText(OutlinedButton, 'Cargar más'),
-          _servidorGastos(sinRed: true));
+      _servidor.sinRedAlListar = true;
+      await _tocarYEsperar(tester, find.widgetWithText(OutlinedButton, 'Cargar más'));
       expect(find.textContaining('No se pudieron cargar más gastos: No hay conexión'), findsOneWidget);
       expect(find.widgetWithText(OutlinedButton, 'Reintentar cargar más'), findsOneWidget);
       expect(find.byType(MaterialBanner), findsNothing);

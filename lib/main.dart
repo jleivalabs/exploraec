@@ -3,12 +3,14 @@ import 'package:get/get.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'bindings/places_binding.dart';
+import 'controllers/auth_controller.dart';
 // Por qué: el diccionario de textos vive en su propio archivo; sin este import, `AppTranslations` no existe aquí.
 import 'i18n/app_translations.dart';
 import 'screens/favorites_screen.dart';
 import 'screens/gastos_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/map_screen.dart';
+import 'services/api_client.dart';
 // TODO(sesion-07): OPCIONAL — descomenta la línea de abajo (Paso 6 — idioma guardado). No borres nada.
 import 'services/settings_service.dart';
 import 'theme/app_theme.dart';
@@ -21,7 +23,6 @@ Future<void> main() async {
   await Hive.initFlutter();
   // Solo la caja de favoritos: la de gastos depende de QUIÉN inicie sesión,
   // así que se abre después, en `GastosRepository.abrirParaUsuario()`.
-  // El token NO se guarda en Hive: sigue solo en memoria (Sesión 8).
   await Hive.openBox<Map>('favoritos');
   // TODO(sesion-07): OPCIONAL — descomenta la línea de abajo (Paso 6 — idioma guardado). No borres nada.
   // Por qué: el idioma elegido se guarda en su propia caja de Hive
@@ -29,6 +30,12 @@ Future<void> main() async {
   // `GetMaterialApp` necesita el idioma al construirse, así que la caja
   // se abre aquí, antes de `runApp`, igual que la de arriba.
   await SettingsService.abrir();
+  // Sesión 8: un solo `ApiClient` (dio) y un solo `AuthController` para toda
+  // la app, registrados antes de `runApp` (las pantallas de Gastos los buscan
+  // con `Get.find`). El token NO se guarda en Hive: va en el almacenamiento
+  // seguro (`SecureTokenStorage`).
+  Get.put(ApiClient(), permanent: true);
+  Get.put(AuthController(), permanent: true);
   runApp(const ExploraEcApp());
 }
 

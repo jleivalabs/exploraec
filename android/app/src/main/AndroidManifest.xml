@@ -6,7 +6,12 @@
     <!-- usesCleartextTraffic="true" permite HTTP sin TLS hacia el backend local
          (http://10.0.2.2:8000). Solo para desarrollo: una app publicada debe usar HTTPS
          y quitar este atributo (o limitarlo con network_security_config). -->
+    <!-- Sesión 8: sin copias de los datos de la app (ver res/xml/data_extraction_rules.xml).
+         allowBackup="false" cubre la copia automática hasta Android 11; en Android 12+
+         dataExtractionRules excluye también la copia en la nube y device-transfer. -->
     <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="true"
         android:label="exploraec"
         android:name="${applicationName}"
