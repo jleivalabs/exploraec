@@ -34,29 +34,18 @@ class _AddPlaceScreenState extends State<AddPlaceScreen> {
           key: _formKey,
           child: Column(
             children: [
-              // Por qué: TextField no valida nada por sí solo —
-              // TextFormField agrega la propiedad validator, que
-              // rechaza un nombre vacío antes de que se pueda guardar.
               TextFormField(
                 controller: _nombreController,
                 decoration: const InputDecoration(labelText: 'Nombre del lugar', hintText: 'Ej. Parque El Ejido'),
                 validator: (valor) => (valor == null || valor.trim().isEmpty) ? 'El nombre es obligatorio' : null,
               ),
               const SizedBox(height: 12),
-
-              // Por qué: mismo patrón que el campo anterior — el
-              // validator de categoría evita guardar un lugar sin
-              // clasificar.
               TextFormField(
                 controller: _categoriaController,
                 decoration: const InputDecoration(labelText: 'Categoría', hintText: 'Ej. Cafeterías'),
                 validator: (valor) => (valor == null || valor.trim().isEmpty) ? 'La categoría es obligatoria' : null,
               ),
               const SizedBox(height: 12),
-
-              // Por qué: el validator exige un mínimo de 10 caracteres,
-              // para que la descripción realmente aporte información
-              // sobre el lugar, en vez de aceptar cualquier texto corto.
               TextFormField(
                 controller: _descripcionController,
                 decoration: const InputDecoration(labelText: 'Descripción'),
@@ -65,11 +54,6 @@ class _AddPlaceScreenState extends State<AddPlaceScreen> {
                     (valor == null || valor.trim().length < 10) ? 'Escribe al menos 10 caracteres' : null,
               ),
               const SizedBox(height: 24),
-
-              // Por qué: onPressed: null deja el botón deshabilitado
-              // (se ve en gris) — el bloque real llama a
-              // _formKey.currentState!.validate() y solo agrega el
-              // Place si los 3 campos pasaron su validator.
               ElevatedButton(
                 onPressed: () {
                   if (_formKey.currentState!.validate()) {
