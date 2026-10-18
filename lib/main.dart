@@ -1,16 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 import 'bindings/places_binding.dart';
 // Por qué: el diccionario de textos vive en su propio archivo; sin este import, `AppTranslations` no existe aquí.
 import 'i18n/app_translations.dart';
+import 'screens/favorites_screen.dart';
+import 'screens/gastos_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/map_screen.dart';
-import 'screens/favorites_placeholder_screen.dart';
-import 'screens/gastos_screen.dart';
+// TODO(sesion-07): OPCIONAL — descomenta la línea de abajo (Paso 6 — idioma guardado). No borres nada.
+import 'services/settings_service.dart';
 import 'theme/app_theme.dart';
 
-void main() {
+Future<void> main() async {
+  // Hive necesita el motor de Flutter listo antes de pedirle al sistema
+  // operativo la carpeta donde guardar sus archivos — por eso `main` ahora
+  // es `async` y arranca con `ensureInitialized()` antes que nada más.
+  WidgetsFlutterBinding.ensureInitialized();
+  await Hive.initFlutter();
+  // Solo la caja de favoritos: la de gastos depende de QUIÉN inicie sesión,
+  // así que se abre después, en `GastosRepository.abrirParaUsuario()`.
+  // El token NO se guarda en Hive: sigue solo en memoria (Sesión 8).
+  await Hive.openBox<Map>('favoritos');
+  // TODO(sesion-07): OPCIONAL — descomenta la línea de abajo (Paso 6 — idioma guardado). No borres nada.
+  // Por qué: el idioma elegido se guarda en su propia caja de Hive
+  // (`ajustes`). Hive solo deja leer una caja que ya está abierta, y
+  // `GetMaterialApp` necesita el idioma al construirse, así que la caja
+  // se abre aquí, antes de `runApp`, igual que la de arriba.
+  await SettingsService.abrir();
   runApp(const ExploraEcApp());
 }
 
@@ -33,7 +51,11 @@ class ExploraEcApp extends StatelessWidget {
       // `locale` elige el idioma con el que arranca y `fallbackLocale` el
       // que se usa si falta una clave. Con esto, `'clave'.tr` ya funciona.
       translations: AppTranslations(),
-      locale: const Locale('es', 'EC'),
+      // TODO(sesion-07): OPCIONAL — borra la línea `locale: const Locale('es', 'EC'),` de abajo y descomenta la siguiente. (Paso 6 — idioma guardado)
+      // Por qué: una línea fija (`const Locale('es', 'EC')`) siempre
+      // arrancaba en español. Esta lee el idioma guardado en Hive (y usa
+      // español si nunca se eligió otro).
+      locale: SettingsService.idioma,
       fallbackLocale: const Locale('es', 'EC'),
       initialBinding: PlacesBinding(),
       home: const RootShell(),
@@ -58,7 +80,7 @@ class _RootShellState extends State<RootShell> {
       body: switch (_indiceActual) {
         0 => const HomeScreen(),
         1 => const MapScreen(),
-        2 => const FavoritesPlaceholderScreen(),
+        2 => const FavoritesScreen(),
         _ => const GastosScreen(),
       },
       bottomNavigationBar: BottomNavigationBar(

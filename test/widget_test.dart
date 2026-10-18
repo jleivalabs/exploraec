@@ -10,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
@@ -20,7 +21,7 @@ import 'package:exploraec/main.dart';
 import 'package:exploraec/models/place.dart';
 import 'package:exploraec/screens/add_place_screen.dart';
 import 'package:exploraec/screens/detail_screen.dart';
-import 'package:exploraec/screens/favorites_placeholder_screen.dart';
+import 'package:exploraec/screens/favorites_screen.dart';
 import 'package:exploraec/screens/gastos_screen.dart';
 import 'package:exploraec/screens/home_screen.dart';
 import 'package:exploraec/screens/map_screen.dart';
@@ -186,6 +187,115 @@ class _SinRed extends HttpOverrides {
 /// El PlacesController que registró PlacesBinding al montar la app.
 PlacesController _controller() => Get.find<PlacesController>();
 
+/// Caja de favoritos (Sesión 7): `main()` la abre en la app; aquí la abre
+/// `setUpAll` EN MEMORIA. Desde el Paso 3 cada toque del corazón escribe en
+/// la caja, y una escritura real en disco no termina dentro del reloj
+/// simulado de `testWidgets` (y dejaría bloqueado el `clear()` del
+/// `tearDown`, que espera las escrituras pendientes). La persistencia real
+/// en disco —cerrar y reabrir la caja— la cubre
+/// `favoritos_persistencia_test.dart`.
+Box<Map> get _cajaFavoritos => Hive.box<Map>('favoritos');
+
+/// `FavoritesScreen` (Sesión 7) a la vista con exactamente [cantidad]
+/// tarjetas; con 0, el `EmptyView` que invita a marcar un lugar.
+void _comprobarFavoritos(int cantidad) {
+  final pantalla = find.byType(FavoritesScreen);
+  expect(pantalla, findsOneWidget);
+  final tarjetas = find.descendant(of: pantalla, matching: find.byType(PlaceCard));
+  final vacio = find.descendant(of: pantalla, matching: find.byType(EmptyView));
+  if (cantidad == 0) {
+    expect(tarjetas, findsNothing);
+    expect(vacio, findsOneWidget);
+    expect(find.textContaining('Todavía no marcaste ningún lugar como favorito.'),
+        findsOneWidget);
+  } else {
+    expect(tarjetas, findsNWidgets(cantidad));
+    expect(vacio, findsNothing);
+  }
+}
+
+/// Abre la caja `gastos_1` (id que devuelve el `/usuarios/me` simulado) EN
+/// MEMORIA. Desde el Paso 2 cada carga escribe la copia en la caja, y una
+/// escritura real en disco no termina dentro del reloj simulado de
+/// `testWidgets` (`pump()` no la espera). Una caja en memoria no hace E/S,
+/// así que no necesita `runAsync`; `GastosRepository.abrirParaUsuario()`
+/// reutiliza esta caja ya abierta. La escritura en disco la cubre
+/// `gastos_controller_test.dart`.
+Future<void> _abrirCajaDeGastos(WidgetTester tester) async {
+  await Hive.openBox('gastos_1', bytes: Uint8List(0));
+  expect(Hive.isBoxOpen('gastos_1'), isTrue);
+}
+
+/// Backend de gastos simulado para las pruebas de la copia local: responde
+/// registro (correo existente), login y perfil; `/gastos/` devuelve
+/// [gastos] con `X-Total-Count` = [total], o falla sin red / con [fallo].
+MockClient _servidorGastos({
+  List<Map<String, Object>> gastos = const [],
+  int? total,
+  bool sinRed = false,
+  int? fallo,
+}) {
+  return MockClient((req) async {
+    http.Response json(Object cuerpo, int codigo, {Map<String, String> cabeceras = const {}}) =>
+        http.Response(jsonEncode(cuerpo), codigo,
+            headers: {'content-type': 'application/json', ...cabeceras});
+    switch (req.url.path) {
+      case '/usuarios/':
+        return json({'detail': 'El email ya está registrado'}, 400);
+      case '/usuarios/token':
+        return json({'access_token': 'token-sintetico', 'token_type': 'bearer'}, 200);
+      case '/usuarios/me':
+        return json({'id': 1, 'email': 'prueba@ejemplo.com'}, 200);
+      case '/gastos/':
+        if (sinRed) throw const SocketException('sin red');
+        if (fallo != null) return json({'detail': 'x'}, fallo);
+        return json(gastos, 200, cabeceras: {'x-total-count': '${total ?? gastos.length}'});
+    }
+    return json({'detail': 'no existe'}, 404);
+  });
+}
+
+/// Abre la app, entra en Gastos con [servidor] y espera la lista. Bloquea la
+/// red real durante toda la prueba.
+Future<_SinRed> _entrarEnGastos(WidgetTester tester, MockClient servidor) async {
+  final sinRed = _SinRed();
+  final anterior = HttpOverrides.current;
+  HttpOverrides.global = sinRed;
+  addTearDown(() => HttpOverrides.global = anterior);
+
+  await _abrirAppCargada(tester);
+  await tester.tap(find.descendant(
+    of: find.byType(BottomNavigationBar),
+    matching: find.text('Gastos'),
+  ));
+  await tester.pump();
+  await tester.enterText(find.widgetWithText(TextField, 'Correo'), 'prueba@ejemplo.com');
+  await tester.enterText(
+      find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'), 'clave-1234');
+  await _abrirCajaDeGastos(tester);
+  await http.runWithClient(() async {
+    await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
+    await tester.pump();
+    await tester.pump();
+  }, () => servidor);
+  await tester.pumpAndSettle();
+  expect(Get.find<GastosController>().sesionActiva.value, isTrue);
+  return sinRed;
+}
+
+/// Toca [boton] y deja que la carga que dispara use [servidor].
+Future<void> _tocarConServidor(WidgetTester tester, Finder boton, MockClient servidor) async {
+  await http.runWithClient(() async {
+    await tester.tap(boton);
+    await tester.pump();
+    await tester.pump();
+  }, () => servidor);
+  await tester.pumpAndSettle();
+}
+
+const _textoCopia = 'Sin conexión — mostrando tus gastos guardados';
+
+
 /// Monta la app y espera a que Inicio termine la primera carga.
 Future<void> _abrirAppCargada(WidgetTester tester) async {
   await tester.pumpWidget(const ExploraEcApp());
@@ -237,12 +347,31 @@ Future<void> _tocarEmpezarYVerSnackBar(WidgetTester tester) async {
 }
 
 void main() {
-  setUpAll(() {
+  // Carpeta temporal propia de este archivo: Hive nunca escribe fuera de ella.
+  late Directory carpetaHive;
+
+  setUpAll(() async {
     // Evita descargar fuentes por internet durante las pruebas;
     // se usa la fuente de respaldo del entorno de test.
     GoogleFonts.config.allowRuntimeFetching = false;
     // Silencia los registros [GETX] en la salida de las pruebas.
     Get.isLogEnable = false;
+    // Sesión 7: lo mismo que hace `main()` antes de `runApp` (el
+    // `PlacesController` lee esta caja al crearse), pero en memoria y con
+    // Hive apuntando a una carpeta temporal: nada se escribe en la carpeta
+    // de datos de la app real.
+    carpetaHive = Directory.systemTemp.createTempSync('exploraec_hive_widgets_');
+    Hive.init(carpetaHive.path);
+    await Hive.openBox<Map>('favoritos', bytes: Uint8List(0));
+    // Paso 6: `GetMaterialApp` lee `SettingsService.idioma` al construirse;
+    // la caja `ajustes` también va en memoria (el botón de idioma escribe en
+    // ella). La persistencia en disco la cubre `ajustes_persistencia_test.dart`.
+    await Hive.openBox('ajustes', bytes: Uint8List(0));
+  });
+
+  tearDownAll(() async {
+    await Hive.close();
+    if (carpetaHive.existsSync()) carpetaHive.deleteSync(recursive: true);
   });
 
   // Dos estados globales que sobreviven entre pruebas y se limpian tras
@@ -251,7 +380,18 @@ void main() {
   // - el registro de GetX: sin Get.reset() la siguiente prueba recibiría
   //   el PlacesController anterior, ya cargado y con sus modos simulados.
   final lugaresOriginales = List<Place>.of(lugaresEjemplo);
-  tearDown(() {
+  tearDown(() async {
+    // Sesión 7: las cajas de Hive también sobreviven entre pruebas. Se
+    // vacían las de favoritos y ajustes y se descarta la de gastos.
+    await _cajaFavoritos.clear();
+    // El idioma elegido en una prueba no pasa a la siguiente: sin
+    // preferencia guardada, cada prueba arranca en español.
+    await Hive.box('ajustes').clear();
+    // `gastos_1` suele ser una caja en memoria (ver `_abrirCajaDeGastos`):
+    // basta cerrarla para descartarla. La prueba de «Cerrar sesión» la usa en
+    // disco (dentro de `carpetaHive`) y la borra ella misma; si fallara a
+    // medias, cerrarla aquí también basta: `tearDownAll` borra la carpeta.
+    if (Hive.isBoxOpen('gastos_1')) await Hive.box('gastos_1').close();
     Get.reset();
     // El idioma y el diccionario de GetX también son estáticos y Get.reset()
     // no los toca: se dejan como antes de la prueba.
@@ -363,10 +503,10 @@ void main() {
     expect(indiceActual(), 1);
 
     await tocarPestana('Favoritos');
-    expect(find.byType(FavoritesPlaceholderScreen), findsOneWidget);
     expect(find.byType(MapScreen), findsNothing);
-    // Desde la Sesión 4 Favoritos lee el contador del controller compartido.
-    expect(find.textContaining('Favoritos marcados: 0.'), findsOneWidget);
+    // Desde la Sesión 7 Favoritos es FavoritesScreen y lee la lista
+    // `favoritos` del controller compartido: sin marcas, el EmptyView.
+    _comprobarFavoritos(0);
     expect(indiceActual(), 2);
 
     await tocarPestana('Inicio');
@@ -374,7 +514,7 @@ void main() {
     // El estado vive en PlacesController, no en HomeScreen: al volver no
     // hay una carga nueva, los datos ya están.
     expect(find.byType(LoadingView), findsNothing);
-    expect(find.byType(FavoritesPlaceholderScreen), findsNothing);
+    expect(find.byType(FavoritesScreen), findsNothing);
     expect(find.text(lugaresEjemplo.first.nombre), findsOneWidget);
     expect(indiceActual(), 0);
   });
@@ -770,11 +910,13 @@ void main() {
         isTrue,
       );
 
-      // Lo que se marca desde Inicio se ve en el contador de Favoritos.
+      // Lo que se marca desde Inicio se ve en la pestaña Favoritos.
       await tocarCorazon(tester, lugaresEjemplo.first);
       await tocarPestana(tester, 'Favoritos');
       expect(identical(_controller(), controller), isTrue);
-      expect(find.textContaining('Favoritos marcados: 1.'), findsOneWidget);
+      _comprobarFavoritos(1);
+      expect(find.widgetWithText(PlaceCard, lugaresEjemplo.first.nombre),
+          findsOneWidget);
     });
 
     testWidgets('El corazón marca y desmarca sin abrir el detalle', (
@@ -853,20 +995,22 @@ void main() {
       expect(controller.totalFavoritos, 0);
 
       await tocarPestana(tester, 'Favoritos');
-      expect(find.textContaining('Favoritos marcados: 0.'), findsOneWidget);
+      _comprobarFavoritos(0);
       await tocarPestana(tester, 'Inicio');
 
       await tocarCorazon(tester, lugaresEjemplo[0]);
       await tocarCorazon(tester, lugaresEjemplo[1]);
       expect(controller.totalFavoritos, 2);
       await tocarPestana(tester, 'Favoritos');
-      expect(find.textContaining('Favoritos marcados: 2.'), findsOneWidget);
+      _comprobarFavoritos(2);
 
-      // Con la pestaña Favoritos visible, el contador reacciona al instante.
+      // Con la pestaña Favoritos visible, la lista reacciona al instante.
       controller.alternarFavorito(lugaresEjemplo[0]);
       await tester.pump();
       expect(controller.totalFavoritos, 1);
-      expect(find.textContaining('Favoritos marcados: 1.'), findsOneWidget);
+      _comprobarFavoritos(1);
+      expect(find.widgetWithText(PlaceCard, lugaresEjemplo[1].nombre),
+          findsOneWidget);
     });
 
     testWidgets('Las marcas se conservan al cambiar de pestaña', (
@@ -890,6 +1034,86 @@ void main() {
       expect(iconoCorazon(tester, sinMarcar), Icons.favorite_border);
       expect(botonCorazon(tester, sinMarcar).tooltip, tooltipAgregar);
       expect(_controller().totalFavoritos, 1);
+    });
+
+    // Sesión 7 (Punto de partida): `onInit()` ya lee la caja `favoritos`.
+    testWidgets('Los favoritos guardados en Hive se cargan al arrancar', (
+      WidgetTester tester,
+    ) async {
+      final guardado = lugaresEjemplo[1];
+      // Como si la app se hubiera cerrado con este favorito guardado.
+      await _cajaFavoritos.put(guardado.id, guardado.toMap());
+
+      await _abrirAppCargada(tester);
+      final controller = _controller();
+      expect(controller.favoritos.map((p) => p.id).toList(), [guardado.id]);
+      expect(controller.favoritos.single.nombre, guardado.nombre);
+      expect(iconoCorazon(tester, guardado), Icons.favorite);
+      expect(iconoCorazon(tester, lugaresEjemplo[0]), Icons.favorite_border);
+
+      await tocarPestana(tester, 'Favoritos');
+      _comprobarFavoritos(1);
+      expect(find.widgetWithText(PlaceCard, guardado.nombre), findsOneWidget);
+    });
+
+    // Sesión 7 (Paso 3): el corazón escribe en la caja `favoritos`.
+    testWidgets('Marcar guarda el lugar en Hive y aparece en Favoritos; desmarcar lo borra', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final lugar = lugaresEjemplo.first;
+      expect(_cajaFavoritos.isEmpty, isTrue);
+
+      await tocarCorazon(tester, lugar);
+      expect(_cajaFavoritos.keys.toList(), [lugar.id]);
+      expect(Map<String, dynamic>.from(_cajaFavoritos.get(lugar.id)!), lugar.toMap());
+
+      await tocarPestana(tester, 'Favoritos');
+      _comprobarFavoritos(1);
+      expect(find.widgetWithText(PlaceCard, lugar.nombre), findsOneWidget);
+
+      // Desmarcar desde la propia pestaña Favoritos lo quita de la caja.
+      await tocarCorazon(tester, lugar);
+      expect(_cajaFavoritos.containsKey(lugar.id), isFalse);
+      expect(_cajaFavoritos.isEmpty, isTrue);
+      _comprobarFavoritos(0);
+    });
+
+    testWidgets('Un lugar agregado a mano sigue en Favoritos al reabrir la app', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      final propio = Place(
+        id: 'lugar-propio-prueba',
+        nombre: 'Mi lugar de prueba',
+        categoria: 'Pruebas',
+        descripcion: 'Lugar sintético creado por la prueba.',
+        lat: -0.2,
+        lng: -78.5,
+      );
+      _controller().agregarLugar(propio);
+      _controller().alternarFavorito(propio);
+      await tester.pump();
+      expect(_cajaFavoritos.containsKey(propio.id), isTrue);
+
+      // «Reabrir»: se desmonta la app, se olvida el controller y la lista
+      // en memoria vuelve a la inicial (el lugar propio no se guarda en Hive).
+      await tester.pumpWidget(const SizedBox.shrink());
+      Get.reset();
+      lugaresEjemplo
+        ..clear()
+        ..addAll(lugaresOriginales);
+      await _abrirAppCargada(tester);
+
+      final controller = _controller();
+      expect(controller.lugares.any((p) => p.id == propio.id), isFalse,
+          reason: 'En Inicio ya no está: los lugares creados a mano viven en memoria');
+      expect(find.text(propio.nombre), findsNothing);
+      expect(controller.esFavorito(propio), isTrue);
+
+      await tocarPestana(tester, 'Favoritos');
+      _comprobarFavoritos(1);
+      expect(find.widgetWithText(PlaceCard, propio.nombre), findsOneWidget);
     });
   });
 
@@ -1027,10 +1251,10 @@ void main() {
         'Quitar de favoritos',
       );
 
-      // En inglés, la pestaña Favoritos lee el mismo contador.
+      // En inglés, la pestaña Favoritos lee la misma lista.
       await tester.tap(enBarra('Favorites'));
       await tester.pump();
-      expect(find.textContaining('Favoritos marcados: 1.'), findsOneWidget);
+      _comprobarFavoritos(1);
       expect(
         tester.widget<BottomNavigationBar>(find.byType(BottomNavigationBar))
             .currentIndex,
@@ -1046,6 +1270,56 @@ void main() {
       expect(find.byType(LoadingView), findsNothing);
       expect(controller.lugares.map((p) => p.id).toList(), idsLugares);
       expect(controller.esFavorito(favorito), isTrue);
+    });
+
+    // ---- Sesión 7, Paso 6 (opcional): el idioma se guarda en Hive ----
+
+    /// «Reinicia» la app: la desmonta, olvida los controllers y el idioma
+    /// activo de GetX (como un proceso nuevo) y la vuelve a montar. La caja
+    /// `ajustes` NO se vacía: es lo que debe sobrevivir.
+    Future<void> reiniciarApp(WidgetTester tester) async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      Get.reset();
+      Get.locale = null;
+      await _abrirAppCargada(tester);
+    }
+
+    testWidgets('Paso 6: sin preferencia guardada arranca en español', (
+      WidgetTester tester,
+    ) async {
+      expect(Hive.box('ajustes').get('idioma'), isNull);
+      await _abrirAppCargada(tester);
+      expect(Get.locale, const Locale('es', 'EC'));
+      expect(enBarra('Inicio'), findsOneWidget);
+    });
+
+    testWidgets('Paso 6: el botón guarda el idioma elegido en Hive', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      await tocarIdioma(tester, 'Cambiar idioma');
+      expect(Hive.box('ajustes').get('idioma'), 'en');
+      expect(enBarra('Home'), findsOneWidget);
+
+      await tocarIdioma(tester, 'Change language');
+      expect(Hive.box('ajustes').get('idioma'), 'es');
+      expect(enBarra('Inicio'), findsOneWidget);
+    });
+
+    testWidgets('Paso 6: al reiniciar arranca en el idioma guardado (inglés y luego español)', (
+      WidgetTester tester,
+    ) async {
+      await _abrirAppCargada(tester);
+      await tocarIdioma(tester, 'Cambiar idioma');
+
+      await reiniciarApp(tester);
+      expect(Get.locale, const Locale('en', 'US'));
+      await comprobarTextos(tester, textosEn, textosEs);
+
+      await tocarIdioma(tester, 'Change language');
+      await reiniciarApp(tester);
+      expect(Get.locale, const Locale('es', 'EC'));
+      await comprobarTextos(tester, textosEs, textosEn);
     });
   });
 
@@ -1563,6 +1837,8 @@ void main() {
             return json({'detail': 'El email ya está registrado'}, 400);
           case '/usuarios/token':
             return json({'access_token': 'token-sintetico', 'token_type': 'bearer'}, 200);
+          case '/usuarios/me':
+            return json({'id': 1, 'email': 'prueba@ejemplo.com'}, 200);
           case '/gastos/':
             return json([
               {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-17'},
@@ -1590,6 +1866,7 @@ void main() {
       await tester.enterText(
           find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'),
           'clave-1234');
+      await _abrirCajaDeGastos(tester);
       // El toque (y todo el flujo async que dispara) usa el backend simulado.
       await http.runWithClient(() async {
         await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
@@ -1598,7 +1875,7 @@ void main() {
       }, () => servidor);
       await tester.pumpAndSettle();
 
-      expect(rutas, ['POST /usuarios/', 'POST /usuarios/token', 'GET /gastos/']);
+      expect(rutas, ['POST /usuarios/', 'POST /usuarios/token', 'GET /usuarios/me', 'GET /gastos/']);
       expect(controller.sesionActiva.value, isTrue);
       expect(controller.autenticando.value, isFalse);
       expect(find.text('Pendiente: conecta el flujo en el Paso 7'), findsNothing);
@@ -1634,6 +1911,8 @@ void main() {
             return json({'detail': 'El email ya está registrado'}, 400);
           case '/usuarios/token':
             return json({'access_token': 'token-sintetico', 'token_type': 'bearer'}, 200);
+          case '/usuarios/me':
+            return json({'id': 1, 'email': 'prueba@ejemplo.com'}, 200);
           case '/gastos/':
             consultas.add(req.url.queryParameters);
             final gastos = [
@@ -1658,6 +1937,7 @@ void main() {
           find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'),
           'clave-1234');
 
+      await _abrirCajaDeGastos(tester);
       await http.runWithClient(() async {
         await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
         await tester.pump();
@@ -1698,6 +1978,195 @@ void main() {
       expect(find.byType(RefreshIndicator), findsOneWidget);
       expect(sinRed.intentos, 0, reason: 'No debe abrirse ninguna conexión real');
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('Cerrar sesión en Gastos (Sesión 7, Paso 5)', () {
+    // Esta prueba NO usa `_abrirCajaDeGastos` (caja en memoria): una caja en
+    // memoria no admite `deleteFromDisk()`, que es justo lo que hace
+    // «Cerrar sesión». Aquí `GastosRepository` abre `gastos_1` en disco, en
+    // la carpeta temporal de este archivo. La E/S de disco no avanza dentro
+    // del reloj simulado, así que `entrar` y `salir` se ejecutan con
+    // `tester.runAsync` (zona real) y después `pump` muestra el resultado en
+    // pantalla. No se cambia nada del código de producción.
+    testWidgets('Cerrar sesión borra la caja del disco, conserva favoritos y vuelve al formulario', (
+      WidgetTester tester,
+    ) async {
+      final sinRed = _SinRed();
+      final anterior = HttpOverrides.current;
+      HttpOverrides.global = sinRed;
+      addTearDown(() => HttpOverrides.global = anterior);
+      final archivoGastos =
+          File('${carpetaHive.path}${Platform.pathSeparator}gastos_1.hive');
+
+      await _abrirAppCargada(tester);
+      // Un favorito marcado antes: no debe verse afectado por la salida.
+      final favorito = lugaresEjemplo.first;
+      _controller().alternarFavorito(favorito);
+      await tester.pump();
+
+      await tester.tap(find.descendant(
+        of: find.byType(BottomNavigationBar),
+        matching: find.text('Gastos'),
+      ));
+      await tester.pump();
+      final controller = Get.find<GastosController>();
+      await tester.enterText(find.widgetWithText(TextField, 'Correo'), 'prueba@ejemplo.com');
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Contraseña (8 a 72 caracteres)'), 'clave-1234');
+
+      // Lo mismo que hace el botón «Entrar» (probado arriba con caja en
+      // memoria), pero en la zona real para que Hive abra y escriba en disco.
+      await tester.runAsync(() => http.runWithClient(
+            () => controller.entrar('prueba@ejemplo.com', 'clave-1234'),
+            () => _servidorGastos(gastos: [
+              {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
+            ], total: 45),
+          ));
+      await tester.pumpAndSettle();
+      expect(controller.sesionActiva.value, isTrue);
+      expect(find.text('Almuerzo en el Mercado Central'), findsOneWidget);
+      expect(Hive.isBoxOpen('gastos_1'), isTrue);
+      expect(archivoGastos.existsSync(), isTrue);
+
+      // El menú «⋮» de Gastos ofrece «Cerrar sesión»; su acción es
+      // `controller.salir()`, que se ejecuta en la zona real (borra en disco).
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      expect(find.text('Cerrar sesión'), findsOneWidget);
+      await tester.tapAt(Offset.zero); // cierra el menú sin elegir nada
+      await tester.pumpAndSettle();
+      expect(controller.sesionActiva.value, isTrue);
+      await tester.runAsync(controller.salir);
+      await tester.pumpAndSettle();
+
+      // De vuelta al formulario, sin rastro de los gastos ni de su caja.
+      expect(find.widgetWithText(TextField, 'Correo'), findsOneWidget);
+      expect(find.text('Almuerzo en el Mercado Central'), findsNothing);
+      expect(archivoGastos.existsSync(), isFalse);
+      expect(controller.gastos, isEmpty);
+      expect(controller.totalEnServidor.value, 0);
+      expect(controller.desdeCache.value, isFalse);
+      expect(controller.mensajeCargarMas.value, isEmpty);
+      expect(controller.cargandoMas.value, isFalse);
+      // Favoritos intacta.
+      expect(Hive.isBoxOpen('favoritos'), isTrue);
+      expect(_cajaFavoritos.containsKey(favorito.id), isTrue);
+      expect(_controller().esFavorito(favorito), isTrue);
+      expect(sinRed.intentos, 0, reason: 'No debe abrirse ninguna conexión real');
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('Copia local en Gastos (Sesión 7, Paso 2)', () {
+    final dos = <Map<String, Object>>[
+      {'id': 1, 'descripcion': 'Almuerzo en el Mercado Central', 'monto': 6.5, 'categoria': 'comida', 'fecha': '2026-10-18'},
+      {'id': 2, 'descripcion': 'Taxi al Panecillo', 'monto': 4, 'categoria': 'transporte', 'fecha': '2026-10-18'},
+    ];
+
+    testWidgets('Sin conexión: banner con última sincronización; Reintentar lo quita', (
+      WidgetTester tester,
+    ) async {
+      final sinRed = await _entrarEnGastos(tester, _servidorGastos(gastos: dos));
+      expect(find.byType(MaterialBanner), findsNothing);
+
+      await _tocarConServidor(tester, find.byTooltip('Recargar'), _servidorGastos(sinRed: true));
+      final controller = Get.find<GastosController>();
+      expect(controller.desdeCache.value, isTrue);
+      expect(find.byType(MaterialBanner), findsOneWidget);
+      expect(find.textContaining(_textoCopia), findsOneWidget);
+      expect(find.textContaining('(última sincronización: '), findsOneWidget);
+      expect(find.textContaining('desconocida'), findsNothing);
+      expect(find.textContaining('Copia parcial'), findsNothing);
+      expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+      // La copia sigue siendo una lista deslizable, con sus gastos.
+      expect(find.text('Almuerzo en el Mercado Central'), findsOneWidget);
+      expect(find.text('Taxi al Panecillo'), findsOneWidget);
+      expect(find.byType(RefreshIndicator), findsOneWidget);
+      expect(
+        tester.widget<ListView>(find.descendant(
+            of: find.byType(RefreshIndicator), matching: find.byType(ListView))).physics,
+        isA<AlwaysScrollableScrollPhysics>(),
+      );
+
+      // Con el servidor de vuelta, «Reintentar» recarga y el banner se va.
+      await _tocarConServidor(
+          tester, find.widgetWithText(TextButton, 'Reintentar'), _servidorGastos(gastos: dos));
+      expect(controller.desdeCache.value, isFalse);
+      expect(find.byType(MaterialBanner), findsNothing);
+      expect(find.text('Gastos (2)'), findsOneWidget);
+      expect(sinRed.intentos, 0, reason: 'No debe abrirse ninguna conexión real');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Deslizar con el servidor de vuelta también quita el banner', (
+      WidgetTester tester,
+    ) async {
+      await _entrarEnGastos(tester, _servidorGastos(gastos: dos));
+      await _tocarConServidor(tester, find.byTooltip('Recargar'), _servidorGastos(fallo: 503));
+      expect(find.byType(MaterialBanner), findsOneWidget);
+
+      await http.runWithClient(() async {
+        await tester.fling(
+            find.text('Almuerzo en el Mercado Central'), const Offset(0, 400), 1500);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+      }, () => _servidorGastos(gastos: dos));
+      await tester.pumpAndSettle();
+      expect(Get.find<GastosController>().desdeCache.value, isFalse);
+      expect(find.byType(MaterialBanner), findsNothing);
+    });
+
+    testWidgets('Copia parcial: indica guardados respecto al total y oculta «Cargar más»', (
+      WidgetTester tester,
+    ) async {
+      // 2 gastos a la vista de 45 en el servidor: hay más páginas.
+      await _entrarEnGastos(tester, _servidorGastos(gastos: dos, total: 45));
+      expect(find.text('Gastos (45)'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, 'Cargar más'), findsOneWidget);
+
+      await _tocarConServidor(tester, find.byTooltip('Recargar'), _servidorGastos(sinRed: true));
+      expect(find.textContaining(_textoCopia), findsOneWidget);
+      expect(find.textContaining('Copia parcial: 2 de 45 gastos guardados.'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, 'Cargar más'), findsNothing);
+      expect(find.text('Taxi al Panecillo'), findsOneWidget);
+    });
+
+    testWidgets('Copia vacía: EmptyView con el banner', (
+      WidgetTester tester,
+    ) async {
+      await _entrarEnGastos(tester, _servidorGastos());
+      expect(find.byType(EmptyView), findsOneWidget);
+      expect(find.byType(MaterialBanner), findsNothing);
+
+      await _tocarConServidor(tester, find.byTooltip('Recargar'), _servidorGastos(sinRed: true));
+      expect(find.byType(EmptyView), findsOneWidget);
+      expect(find.byType(ErrorView), findsNothing);
+      expect(find.byType(MaterialBanner), findsOneWidget);
+      expect(find.textContaining(_textoCopia), findsOneWidget);
+      expect(find.textContaining('Copia parcial'), findsNothing);
+    });
+
+    testWidgets('Sin copia guardada, el fallo sigue mostrando ErrorView', (
+      WidgetTester tester,
+    ) async {
+      await _entrarEnGastos(tester, _servidorGastos(sinRed: true));
+      expect(find.byType(ErrorView), findsOneWidget);
+      expect(find.byType(MaterialBanner), findsNothing);
+    });
+
+    testWidgets('Fallo de «Cargar más»: aviso junto al botón y la lista intacta', (
+      WidgetTester tester,
+    ) async {
+      await _entrarEnGastos(tester, _servidorGastos(gastos: dos, total: 45));
+
+      await _tocarConServidor(tester, find.widgetWithText(OutlinedButton, 'Cargar más'),
+          _servidorGastos(sinRed: true));
+      expect(find.textContaining('No se pudieron cargar más gastos: No hay conexión'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, 'Reintentar cargar más'), findsOneWidget);
+      expect(find.byType(MaterialBanner), findsNothing);
+      expect(find.byType(ListTile), findsNWidgets(2));
+      expect(find.text('Gastos (45)'), findsOneWidget);
     });
   });
 

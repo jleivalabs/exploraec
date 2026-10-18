@@ -9,6 +9,8 @@ import '../widgets/error_view.dart';
 import '../widgets/loading_view.dart';
 import '../widgets/place_card.dart';
 import 'add_place_screen.dart';
+// TODO(sesion-07): OPCIONAL — descomenta la línea de abajo (Paso 6 — idioma guardado). No borres nada.
+import '../services/settings_service.dart';
 
 /// Pantalla de Inicio: lista de lugares — Sesión 2. Desde la Sesión 4 ya
 /// no mantiene su propio `Future`/`setState`: `GetView<PlacesController>`
@@ -26,16 +28,18 @@ class HomeScreen extends GetView<PlacesController> {
       appBar: AppBar(
         title: Obx(() => Text('ExploraEC (${controller.total})')),
         actions: [
-          // Por qué: `Get.updateLocale` cambia el idioma activo y reconstruye
-          // la app entera sin `setState` ni `context`: es estado global, igual
-          // que `PlacesController`, pero manejado por el propio GetX.
+          // Por qué: `Get.updateLocale` (dentro de `alternarIdioma`) cambia el
+          // idioma activo y reconstruye la app entera sin `setState` ni
+          // `context`: es estado global, igual que `PlacesController`, pero
+          // manejado por el propio GetX.
           IconButton(
             icon: const Icon(Icons.translate),
             tooltip: 'idioma'.tr,
-            onPressed: () {
-              final esEspanol = Get.locale?.languageCode == 'es';
-              Get.updateLocale(esEspanol ? const Locale('en', 'US') : const Locale('es', 'EC'));
-            },
+            // TODO(sesion-07): OPCIONAL — borra el bloque `onPressed: () { ... },` de abajo y descomenta la línea siguiente. (Paso 6 — idioma guardado)
+            // Por qué: cambiar el idioma solo con `Get.updateLocale` no lo
+            // recordaba. `SettingsService.alternarIdioma` hace lo mismo y,
+            // además, guarda la elección en Hive para el próximo arranque.
+            onPressed: SettingsService.alternarIdioma,
           ),
           PopupMenuButton<String>(
             tooltip: 'Simular estado (solo práctica)',

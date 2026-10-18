@@ -12,7 +12,8 @@ import '../widgets/loading_view.dart';
 
 /// Sección «Gastos del viaje» — Sesión 6. Sin sesión muestra el formulario de
 /// correo y contraseña; con sesión, la lista con los mismos 3 estados de la
-/// Sesión 3 (cargando, vacío, error) que ya usa Inicio.
+/// Sesión 3 (cargando, vacío, error) que ya usa Inicio. Desde la Sesión 7, si
+/// lo que se ve es la copia guardada en Hive, un `MaterialBanner` lo avisa.
 class GastosScreen extends GetView<GastosController> {
   const GastosScreen({super.key});
 
@@ -53,24 +54,60 @@ class GastosScreen extends GetView<GastosController> {
             onReintentar: controller.cargarGastos,
           );
         }
-        if (controller.gastos.isEmpty) {
-          return const EmptyView(mensaje: 'Aún no registras gastos en este viaje');
-        }
         // Por qué: `RefreshIndicator.onRefresh` exige una función que devuelva
         // un `Future` — el indicador gira hasta que ese `Future` termina.
         // `cargarGastos` ya es `async`, así que se pasa tal cual: no hace falta
         // escribir nada nuevo. Mientras recarga, el `Obx` de arriba muestra el
         // `LoadingView` de siempre; eso es lo esperado.
-        return RefreshIndicator(
-          onRefresh: controller.cargarGastos,
-          child: _buildLista(controller.gastos),
+        final contenido = controller.gastos.isEmpty
+            ? const EmptyView(mensaje: 'Aún no registras gastos en este viaje')
+            : RefreshIndicator(
+                onRefresh: controller.cargarGastos,
+                child: _buildLista(controller.gastos),
+              );
+        if (!controller.desdeCache.value) return contenido;
+        // Sesión 7 (Paso 2): la copia local va con su aviso, también cuando
+        // la copia guardada es una lista vacía.
+        return Column(
+          children: [
+            _buildAvisoCopia(),
+            Expanded(child: contenido),
+          ],
         );
       }),
     );
   }
 
+  /// Banner del curso («Sin conexión — mostrando tus gastos guardados») con
+  /// la última sincronización y «Reintentar». Ajuste propio: si la copia es
+  /// parcial (se guardaron menos gastos que el total que informó el
+  /// servidor), lo dice, para no presentarla como la lista completa.
+  Widget _buildAvisoCopia() {
+    final guardados = controller.gastos.length;
+    final total = controller.totalEnServidor.value;
+    final parcial = guardados < total;
+    return MaterialBanner(
+      content: Text(
+        'Sin conexión — mostrando tus gastos guardados '
+        '(última sincronización: ${controller.ultimaSincronizacion})'
+        '${parcial ? '. Copia parcial: $guardados de $total gastos guardados.' : ''}',
+      ),
+      leading: const Icon(Icons.cloud_off),
+      actions: [
+        TextButton(
+          onPressed: controller.cargarGastos,
+          child: const Text('Reintentar'),
+        ),
+      ],
+    );
+  }
+
   Widget _buildLista(List<Gasto> gastos) {
+    // Se leen aquí (dentro del `Obx`), no en `itemBuilder`: `ListView.builder`
+    // construye sus filas después, fuera del seguimiento de `Obx`.
     final conBoton = controller.hayMas;
+    final cargandoMas = controller.cargandoMas.value;
+    final fallo = controller.mensajeCargarMas.value;
     return ListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
       itemCount: gastos.length + (conBoton ? 1 : 0),
@@ -78,7 +115,25 @@ class GastosScreen extends GetView<GastosController> {
         if (i == gastos.length) {
           return Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
-            child: OutlinedButton(onPressed: controller.cargarMas, child: const Text('Cargar más')),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (fallo.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                    child: Text(
+                      'No se pudieron cargar más gastos: $fallo',
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
+                OutlinedButton(
+                  onPressed: cargandoMas ? null : controller.cargarMas,
+                  child: cargandoMas
+                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : Text(fallo.isEmpty ? 'Cargar más' : 'Reintentar cargar más'),
+                ),
+              ],
+            ),
           );
         }
         final g = gastos[i];
