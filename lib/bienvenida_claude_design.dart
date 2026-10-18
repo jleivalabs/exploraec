@@ -79,9 +79,9 @@ class _Encabezado extends StatelessWidget {
           const _IconoPin(),
           const SizedBox(height: 36),
           Text.rich(
-            TextSpan(
+            const TextSpan(
               text: 'Explora',
-              children: const [
+              children: [
                 TextSpan(
                   text: 'EC',
                   style: TextStyle(color: _ClaudeColors.accent),

@@ -1,3 +1,9 @@
+// Excepción local de avoid_print: este archivo de práctica usa print a
+// propósito para observar en consola los ejercicios de la Sesión 2
+// (y, en ContadorDemo, el ciclo de vida initState/setState/dispose).
+// La regla sigue activa para el resto del proyecto.
+// ignore_for_file: avoid_print
+
 // ExploraEC -- Sesión 2: fundamentos de Dart
 // Ejecutar con: dart run lib/playground/dart_basics.dart
 
