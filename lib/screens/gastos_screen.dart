@@ -13,6 +13,7 @@ import '../widgets/error_view.dart';
 import '../widgets/loading_view.dart';
 import '../widgets/sin_sesion_view.dart';
 import 'gasto_form_screen.dart';
+import 'pantalla_con_fallo.dart';
 // Solo lo usan los bloques comentados del Paso 9.
 // ignore_for_file: unused_import
 import 'cambiar_password_screen.dart';
@@ -55,14 +56,28 @@ class GastosScreen extends GetView<GastosController> {
               // Por qué: pantalla opcional del Paso 9 (cambiar contraseña).
               // TODO(sesion-08) OPCIONAL Paso 9: descomenta la línea de abajo (abrir la pantalla).
               // if (valor == 'password') Get.to(() => const CambiarPasswordScreen());
+              // Solo práctica (Sesión 10, Paso 2): provocan errores a propósito.
+              if (valor == 'error_pantalla') Get.to(() => const PantallaConFallo());
+              if (valor == 'error_async') {
+                Future<void>.delayed(Duration.zero, () => throw StateError('Fallo asíncrono provocado a propósito'));
+              }
+              // Por qué: pantalla opcional con las licencias de los paquetes que usa la app.
+              // TODO(sesion-10) OPCIONAL Paso 10: descomenta la línea de abajo (abrir «Acerca de»).
+              // if (valor == 'acerca') showLicensePage(context: context, applicationName: 'ExploraEC', applicationVersion: '1.0.0');
             },
             itemBuilder: (context) => [
               // TODO(sesion-08) OPCIONAL Paso 9: descomenta la línea de abajo (opción del menú).
               // const PopupMenuItem(value: 'password', child: Text('Cambiar contraseña')),
+              // TODO(sesion-10) OPCIONAL Paso 10: descomenta la línea de abajo (opción del menú).
+              // const PopupMenuItem(value: 'acerca', child: Text('Acerca de')),
               const PopupMenuItem(value: 'salir', child: Text('Cerrar sesión')),
-              // Solo en modo debug: invalidar el token es una herramienta de práctica.
-              if (kDebugMode)
-                const PopupMenuItem(value: 'invalidar', child: Text('Invalidar token (solo práctica)')),
+              // Solo en modo debug: herramientas de práctica (token inválido y
+              // errores provocados de la Sesión 10).
+              if (kDebugMode) ...const [
+                PopupMenuItem(value: 'invalidar', child: Text('Invalidar token (solo práctica)')),
+                PopupMenuItem(value: 'error_pantalla', child: Text('Error de pantalla (solo práctica)')),
+                PopupMenuItem(value: 'error_async', child: Text('Error asíncrono (solo práctica)')),
+              ],
             ],
           ),
         ],

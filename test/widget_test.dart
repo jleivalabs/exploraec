@@ -493,7 +493,9 @@ void main() {
       expect(enDetalle(otro.nombre), findsNothing);
 
       // Volver a Inicio con el botón atrás del AppBar (Navigator.pop).
-      await tester.pageBack();
+      // Sesión 10: con `flutter_localizations` el botón «atrás» ya no tiene el
+      // tooltip en inglés («Back») que busca `pageBack()`: se toca por su tipo.
+      await tester.tap(find.byType(BackButton));
       await tester.pumpAndSettle();
       expect(find.byType(DetailScreen), findsNothing);
       expect(find.byType(HomeScreen), findsOneWidget);

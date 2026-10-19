@@ -1,4 +1,43 @@
-# Placeholders de esta rama (sesion-09)
+# Placeholders de esta rama (sesion-10, en curso)
+
+## Sesión 10 — Punto de partida y Paso 1
+
+- **Integrado (sin `git checkout` de carpetas completas):** del starter, `lib/utils/reporte_errores.dart` (bloque del Paso 2 comentado), `lib/widgets/error_pantalla_view.dart`, `lib/screens/pantalla_con_fallo.dart`, `test/sesion_10_test.dart` (Paso 3 comentado), `docs/`, `AGENTS.md` y `CLAUDE.md`. Combinados a mano: `main.dart` (`ReporteErrores.instalar()` antes de `runApp`, `localizationsDelegates` y `supportedLocales` es_EC/en_US), `pubspec.yaml` (`flutter_localizations`, del SDK), `analysis_options.yaml` (excluye `lib/playground/**`) y `gastos_screen.dart` (opciones de depuración «Error de pantalla» y «Error asíncrono»; «Acerca de» del Paso 10 comentado).
+- **Conservado:** nuestra pantalla del Asistente con la marca de sesión; opcionales anteriores inactivos (cambio de contraseña de la Sesión 8, chips de la Sesión 9). El proxy no se cambió.
+- **Pendiente para sus pasos:** `.claude/settings.json` (permisos, Paso 6), las tres líneas de `.gitignore` (Paso 4) y los workflows de `.github/` (Pasos 5 y 8). Pasos 2, 3 y 10 sin activar.
+- **Ajuste de prueba:** con `flutter_localizations`, el botón «atrás» de Material tiene el tooltip en español y `tester.pageBack()` (que busca «Back») ya no lo encontraba; «Tocar una tarjeta abre el detalle…» ahora toca `BackButton` por su tipo, con la misma comprobación.
+- **Resultados reales:** `flutter analyze` sin incidencias. La suite completa (una ejecución, 20 s) dio **207 aprobadas y 2 fallidas**: la esperada del Paso 2 («instalar() reemplaza la pantalla roja…») y la de `pageBack()` descrita arriba. Tras el ajuste, esa prueba pasa ejecutada sola; la suite completa no se repitió (previsto: 208 aprobadas y 1 fallida, la del Paso 2). Sin procesos ni carpetas temporales pendientes.
+
+## Sesión 10 — Paso 2 (errores no controlados)
+
+- Activado el bloque `TODO(sesion-10) Paso 2` de `ReporteErrores.instalar()`, tal como viene del starter: `FlutterError.onError` (presenta y registra), `PlatformDispatcher.instance.onError` (registra, avisa y absorbe) y `ErrorWidget.builder` (vista amistosa `ErrorPantallaView` en lugar de la pantalla roja). `registrar` guarda el mensaje ya limpio (sin cabeceras `Bearer` ni tokens JWT). Se quitó el `ignore_for_file: unused_import` que solo hacía falta con el bloque comentado. No cambia el tratamiento de errores de red, de negocio ni de sesión. Pasos 3 y 10 sin activar.
+- **Resultados automáticos:** `flutter analyze` sin incidencias y la suite completa (una ejecución, 19 s) con **209 pruebas aprobadas**, incluida la prueba de navegación ajustada («Tocar una tarjeta abre el detalle…»). Sin procesos ni carpetas temporales pendientes.
+- **Comprobado a mano:** en el emulador, menú ⋮ de Gastos → «Error de pantalla (solo práctica)» muestra la vista amistosa, y «Error asíncrono (solo práctica)» muestra el aviso con la pantalla de Gastos aún visible.
+- **Pendiente (manual):** revisar el registro de la consola (`[ExploraEC] error no controlado -> …`) para confirmar que no aparecen tokens.
+
+## Sesión 10 — Paso 3 (pruebas de widgets)
+
+- Descomentadas las tres pruebas del bloque `TODO(sesion-10) Paso 3` de `test/sesion_10_test.dart`, sin cambios en sus comprobaciones: sin sesión se ve el motivo y el botón «Iniciar sesión»; registrar con contraseña corta se rechaza sin llamar al servidor; una pantalla que falla muestra la vista amistosa y no la roja. Se quitó el `ignore_for_file` que solo hacía falta con las pruebas comentadas. No usan Hive.
+- **Resultado ejecutado:** `flutter analyze` sin incidencias y `test/sesion_10_test.dart` completo (una ejecución, 5 s) con **6 pruebas aprobadas**. La suite global no se repitió: el total previsto es **212** (209 anteriores + 3), sin verificar en una ejecución completa.
+- **Comprobado a mano (Paso 3):** sin conexión se conservaron los cuatro gastos (copia local); al recuperar la conexión la lista volvió sin banner y el backend registró `GET /gastos/` con 200.
+
+## Sesión 10 — Paso 4 (secretos y registros)
+
+- **Búsqueda de secretos** en `lib/`, `test/`, `mock-server/`, `docs/`, `android/app/src`, `pubspec.yaml`, `analysis_options.yaml`, `AGENTS.md`, `CLAUDE.md` y `.gitignore` (claves `AIza…` y `sk-…`, JWT, claves privadas y asignaciones del tipo `password/secret/api_key = "…"`): **ningún secreto real**. Único hallazgo: un JWT **ficticio** en `test/sesion_10_test.dart:61` (prueba de `limpiar()`, firma de relleno). Las contraseñas y tokens de las pruebas son sintéticos (`clave-1234`, `token-sintetico-…`). `GEMINI_API_KEY`, `E2E_CLAVE` y `SECRET_KEY` aparecen solo como **nombres** de variables en código y documentación.
+- **Registros:** la app solo escribe en consola desde `ReporteErrores.registrar` (`debugPrint` del mensaje ya pasado por `limpiar()`); no hay `print` fuera de `lib/playground/` ni `LogInterceptor` de `dio`. El proxy registra tamaño y nombres de campos, nunca contenido, cabeceras ni clave; `probar-e2e.js` no imprime el token ni la contraseña. `limpiar()` reemplaza cabeceras `Bearer …` y textos con forma de JWT (`eyJ….….…`), y sus pruebas lo comprueban; **no** cubre cualquier secreto posible (por ejemplo, una contraseña o una clave sin ese formato dentro del mensaje de un error). Riesgo residual: los mensajes de error del MCP (`e.message`) se registran sin filtrar.
+- **`.gitignore`:** añadidas `.env`, `.claude/settings.local.json` y `CLAUDE.local.md` (comprobadas con `git check-ignore`). Ninguno de los tres está versionado ni existe en la carpeta; el historial (`git log --all`) no contiene ningún `.env`. No hizo falta reescribir el historial.
+- **Pendiente (manual, Paso 2):** la captura del registro de la consola sigue pendiente; esta revisión del código no la sustituye.
+- Sin cambios en producción, permisos ni workflows; no se ejecutaron análisis ni pruebas (solo cambiaron documentación y `.gitignore`).
+
+
+## Sesión 10 — Paso 5 (CI en GitHub Actions)
+
+- **`.github/workflows/ci.yml`** (del starter) con `flutter-version: '3.47.5'` fijada (la misma con la que validamos; Dart 3.13.4 cumple `sdk: ">=3.5.0 <4.0.0"`). Se dispara en `push` a cualquier rama (`cierre-s10`, `prueba-roja`…), en `pull_request` y a mano (`workflow_dispatch`); permisos `contents: read`; `concurrency` cancela la ejecución anterior de la misma rama. Ejecuta `flutter pub get`, `flutter analyze --no-fatal-infos` y `flutter test`: no necesita backend, emulador, Gemini ni secretos. Versiones de las acciones comprobadas en sus repositorios oficiales: `actions/checkout@v7`, `actions/setup-java@v6`, `subosito/flutter-action@v2`. YAML validado localmente.
+- **Registro del error MCP sin filtrar, corregido:** `mock-server/mcp-cliente.js` ya no escribe `e.message` (podía traer texto del backend); registra «MCP no disponible (código N): se usa el resumen que envió la app», con el código solo si es un estado HTTP válido (`codigoSeguro`). `probar-e2e.js` aplica el mismo criterio en su paso 3/4 y conserva su resultado. El respaldo con el resumen de la app no cambia.
+- **Verificación local (ficticia):** con un MCP falso que responde 500 o un error de herramienta con un marcador ficticio, el proxy (modo REGLAS, sin `GEMINI_API_KEY`) respondió 200 con `X-Resumen-Origen: app`, y ni el marcador ni el token ficticio aparecieron en su consola ni en la de `probar-e2e.js`, que siguió marcando ❌ en el paso 3/4 (salida 1). `node --check` correcto en los JS modificados.
+- **Resultados:** `flutter analyze` sin incidencias y suite completa (una ejecución, 23 s) con **212 pruebas aprobadas**. Sin procesos ni carpetas temporales pendientes.
+- **Pendiente:** la ejecución de CI en GitHub (al subir `cierre-s10`, la rama `prueba-roja` y el pull request).
+- **Anotado para el Paso 8:** `release-apk.yml` deberá compilar con `--dart-define=LLM_BACKEND_URL=http://10.0.2.2:3001` para el Asistente.
 
 ## Sesión 9 — Asistente ExploraIA
 

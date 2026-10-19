@@ -18,6 +18,8 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # Sesión 10: ejercicios de la Sesión 1 (usan `print` a propósito).
+    - lib/playground/**
 
 linter:
   # The lint rules applied to this project can be customized in the

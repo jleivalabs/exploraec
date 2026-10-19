@@ -34,7 +34,11 @@ async function enviar(mensaje, autorizacion, sesion) {
     body: JSON.stringify(mensaje),
     signal: AbortSignal.timeout(ESPERA_MAX_MS),
   });
-  if (!r.ok) throw new Error(`el servidor MCP respondió ${r.status}`);
+  if (!r.ok) {
+    const error = new Error(`el servidor MCP respondió ${r.status}`);
+    error.estado = r.status; // solo el número: nunca el cuerpo ni las cabeceras
+    throw error;
+  }
 
   const nuevaSesion = r.headers.get('mcp-session-id') || sesion;
   const texto = await r.text();
@@ -98,6 +102,16 @@ async function listarHerramientas(autorizacion) {
  * Pide al backend el resumen de gastos de la persona dueña del token.
  * NUNCA lanza: si algo falla devuelve null y el proxy sigue con el resumen que envió la app.
  */
+/**
+ * Texto seguro para registrar un error del MCP — Sesión 10 (Paso 5): solo el
+ * estado HTTP, y solo si es un número válido. Nunca `e.message`, que puede
+ * traer texto recibido del backend (por ejemplo, «el backend respondió: …»).
+ */
+function codigoSeguro(e) {
+  const estado = e && e.estado;
+  return Number.isInteger(estado) && estado >= 100 && estado <= 599 ? ` (código ${estado})` : '';
+}
+
 async function obtenerResumenPorMcp(autorizacion) {
   if (!autorizacion) return null;
   try {
@@ -105,9 +119,9 @@ async function obtenerResumenPorMcp(autorizacion) {
     if (!resumen || !Array.isArray(resumen.categorias)) throw new Error('el resumen no tiene el formato esperado');
     return resumen;
   } catch (e) {
-    console.log(`MCP no disponible (${e.message}): se usa el resumen que envió la app`);
+    console.log(`MCP no disponible${codigoSeguro(e)}: se usa el resumen que envió la app`);
     return null;
   }
 }
 
-module.exports = { obtenerResumenPorMcp, listarHerramientas, llamarHerramienta, MCP_URL };
+module.exports = { obtenerResumenPorMcp, listarHerramientas, llamarHerramienta, codigoSeguro, MCP_URL };

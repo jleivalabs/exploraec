@@ -12,7 +12,7 @@
 //
 // Sin dependencias externas: Node.js 18 o superior.
 
-const { listarHerramientas, llamarHerramienta, MCP_URL } = require('./mcp-cliente');
+const { listarHerramientas, llamarHerramienta, codigoSeguro, MCP_URL } = require('./mcp-cliente');
 
 const BACKEND_URL = (process.env.BACKEND_URL || 'http://localhost:8000').replace(/\/$/, '');
 const PROXY_URL = (process.env.PROXY_URL || 'http://localhost:3000').replace(/\/$/, '');
@@ -74,7 +74,8 @@ async function main() {
     if (!Array.isArray(resumen.categorias) || resumen.categorias.length !== 4) throw new Error('resumen inesperado');
     ok(`3/4 MCP del backend (${MCP_URL}): ${nombres.length} herramientas; resumen_gastos devolvió ${resumen.categorias.length} categorías, total ${resumen.total_general}`);
   } catch (e) {
-    mal(`3/4 El servidor MCP del backend no respondió bien (${e.message})`, `Comprueba que ${MCP_URL} es la dirección del backend de gastos.`);
+    // Solo el estado HTTP (si lo hay): nunca el texto recibido del backend.
+    mal(`3/4 El servidor MCP del backend no respondió bien${codigoSeguro(e)}`, `Comprueba que ${MCP_URL} es la dirección del backend de gastos.`);
     return;
   }
 
