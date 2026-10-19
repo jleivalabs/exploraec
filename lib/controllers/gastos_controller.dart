@@ -48,6 +48,34 @@ class GastosController extends GetxController {
   /// lo muestra junto al botón, sin tapar lo que ya se cargó.
   final RxString mensajeCargarMas = ''.obs;
 
+  /// Filtro por categoría (Sesión 10, Paso 7): `null` es «Todas». Es local:
+  /// solo decide qué gastos YA cargados se muestran; no toca `gastos`, la
+  /// caché, `hayMas` ni la API. Se conserva al recargar o al borrar el último
+  /// gasto de la categoría, y se restablece al cambiar de sesión.
+  final RxnString categoriaFiltro = RxnString();
+
+  /// Categorías de los gastos cargados, sin repetir y en orden de aparición;
+  /// incluye la seleccionada aunque ya no quede ningún gasto suyo cargado
+  /// (así su chip sigue visible y «Cargar más» puede traer más).
+  List<String> get categoriasCargadas {
+    final vistas = <String>[];
+    for (final g in gastos) {
+      if (!vistas.contains(g.categoria)) vistas.add(g.categoria);
+    }
+    final seleccion = categoriaFiltro.value;
+    if (seleccion != null && !vistas.contains(seleccion)) vistas.add(seleccion);
+    return vistas;
+  }
+
+  /// Los gastos cargados que pasan el filtro (una lista nueva: `gastos` no cambia).
+  List<Gasto> get gastosVisibles {
+    final seleccion = categoriaFiltro.value;
+    if (seleccion == null) return gastos;
+    return gastos.where((g) => g.categoria == seleccion).toList();
+  }
+
+  void filtrar(String? categoria) => categoriaFiltro.value = categoria;
+
   /// Con la copia local a la vista no se pide la página siguiente: el
   /// servidor no responde y el desplazamiento no sería coherente.
   bool get hayMas => !desdeCache.value && gastos.length < totalEnServidor.value;
@@ -280,6 +308,7 @@ class GastosController extends GetxController {
   }
 
   void _vaciarEstado() {
+    categoriaFiltro.value = null; // otra sesión no hereda el filtro
     gastos.clear();
     totalEnServidor.value = 0;
     desdeCache.value = false;

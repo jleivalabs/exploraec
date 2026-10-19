@@ -40,5 +40,5 @@ Los dos deben terminar sin errores. Si fallan, corrige el código; no desactives
 
 <!-- Paso 6 de la práctica: escribe aquí dos reglas propias para ESTE proyecto. -->
 
-- (regla 1)
-- (regla 2)
+- Conservar las protecciones de sesión, paginación y caché; justificar y probar cualquier cambio que las afecte.
+- Reutilizar los componentes existentes y mantener los textos nuevos de interfaz en español e inglés mediante las traducciones del proyecto.

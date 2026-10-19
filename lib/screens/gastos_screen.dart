@@ -106,21 +106,27 @@ class GastosScreen extends GetView<GastosController> {
         // `cargarGastos` ya es `async`, así que se pasa tal cual: no hace falta
         // escribir nada nuevo. Mientras recarga, el `Obx` de arriba muestra el
         // `LoadingView` de siempre; eso es lo esperado.
-        final contenido = controller.gastos.isEmpty
+        // Sesión 10 (Paso 7): «Aún no registras gastos» solo es definitivo
+        // si no quedan páginas; con páginas pendientes se muestra la lista
+        // (aunque esté vacía) para que «Cargar más» siga a mano.
+        final hayGastos = controller.gastos.isNotEmpty;
+        final contenido = !hayGastos && !controller.hayMas
             ? const EmptyView(mensaje: 'Aún no registras gastos en este viaje')
             : RefreshIndicator(
                 onRefresh: controller.cargarGastos,
-                child: _buildLista(controller.gastos),
+                child: _buildLista(controller.gastosVisibles),
               );
-        if (!controller.desdeCache.value) return contenido;
-        // Sesión 7 (Paso 2): la copia local va con su aviso, también cuando
-        // la copia guardada es una lista vacía.
-        return Column(
-          children: [
-            _buildAvisoCopia(),
-            Expanded(child: contenido),
-          ],
-        );
+        final partes = <Widget>[
+          // Sesión 7 (Paso 2): la copia local va con su aviso, también cuando
+          // la copia guardada es una lista vacía.
+          if (controller.desdeCache.value) _buildAvisoCopia(),
+          // Con gastos, con una categoría elegida o con páginas pendientes: así
+          // un filtro activo siempre se ve y se puede quitar con «Todas»,
+          // aunque la lista cargada esté vacía.
+          if (hayGastos || controller.categoriaFiltro.value != null || controller.hayMas) _buildFiltro(),
+        ];
+        if (partes.isEmpty) return contenido;
+        return Column(children: [...partes, Expanded(child: contenido)]);
       }),
     );
   }
@@ -149,17 +155,59 @@ class GastosScreen extends GetView<GastosController> {
     );
   }
 
+  /// Chips de filtro (Sesión 10, Paso 7): «Todas» y una por categoría cargada.
+  /// `ChoiceChip` ya anuncia a los lectores de pantalla si está seleccionado.
+  Widget _buildFiltro() {
+    final seleccion = controller.categoriaFiltro.value;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+      child: Row(
+        children: [
+          ChoiceChip(
+            label: Text('filtro_todas'.tr),
+            selected: seleccion == null,
+            onSelected: (_) => controller.filtrar(null),
+          ),
+          for (final categoria in controller.categoriasCargadas)
+            Padding(
+              padding: const EdgeInsets.only(left: AppSpacing.sm),
+              child: ChoiceChip(
+                label: Text(categoria),
+                selected: seleccion == categoria,
+                onSelected: (_) => controller.filtrar(categoria),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildLista(List<Gasto> gastos) {
     // Se leen aquí (dentro del `Obx`), no en `itemBuilder`: `ListView.builder`
     // construye sus filas después, fuera del seguimiento de `Obx`.
     final conBoton = controller.hayMas;
     final cargandoMas = controller.cargandoMas.value;
     final fallo = controller.mensajeCargarMas.value;
+    // Sesión 10 (Paso 7): hay gastos cargados, pero ninguno de la categoría
+    // elegida; se dice así (no «Aún no registras gastos»).
+    final seleccion = controller.categoriaFiltro.value;
+    final sinCoincidencias = seleccion != null && gastos.isEmpty && controller.gastos.isNotEmpty;
+    final filasExtra = sinCoincidencias ? 1 : 0;
     return ListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
-      itemCount: gastos.length + (conBoton ? 1 : 0),
+      itemCount: gastos.length + filasExtra + (conBoton ? 1 : 0),
       itemBuilder: (context, i) {
-        if (i == gastos.length) {
+        if (sinCoincidencias && i == 0) {
+          return Padding(
+            padding: const EdgeInsets.all(AppSpacing.lg),
+            child: Text(
+              'filtro_sin_coincidencias'.trParams({'categoria': seleccion}),
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
+        if (i == gastos.length + filasExtra) {
           return Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
             child: Column(
