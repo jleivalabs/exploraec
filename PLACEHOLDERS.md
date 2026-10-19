@@ -1,4 +1,4 @@
-# Placeholders de esta rama (sesion-10, en curso)
+# Placeholders de esta rama (sesion-10)
 
 ## Sesión 10 — Punto de partida y Paso 1
 
@@ -77,7 +77,18 @@
 - **Versión:** `pubspec.yaml` en `1.0.0+1`; no había etiquetas locales ni remotas, así que corresponde `v1.0.0`.
 - **Resultado local:** YAML validado; `flutter build apk --release` con ambos `--dart-define` correcto (una compilación, 83 s, `app-release.apk` de 53.2 MB; 3 avisos de las herramientas de compilación, no de la app). En el APK aparecen `10.0.2.2:8000` y `10.0.2.2:3001` y no `10.0.2.2:3000`. No se repitió la suite local (solo cambiaron el workflow y la documentación); el workflow la ejecuta completa. No se instaló el APK.
 - **Permisos del agente (evidencia):** al revisar las etiquetas, `git tag -l` fue **denegado** por la regla `deny` `Bash(git tag *)` del Paso 6: bloquea también listar etiquetas, no solo crearlas. Se listaron con `git for-each-ref` (solo lectura).
-- **Pendiente:** en GitHub, CI del PR actualizado; tras el merge, crear y subir `v1.0.0` (lo hace la persona) y comprobar que el workflow publica el Release con `app-release.apk`. En el emulador, instalar ese APK (desinstalando antes si la firma no coincide) y probar backend y Asistente.
+- **Resuelto en el cierre:** CI del PR, etiqueta `v1.0.0`, Release publicado e instalación en el emulador (ver «Sesión 10 — Cierre»).
+
+## Sesión 10 — Cierre (pasos obligatorios completados)
+
+- **Integración:** el PR #1 (`filtro-categoria`) se integró en `main` con sus dos comprobaciones aprobadas; commit de integración `488986e`.
+- **Entrega:** la etiqueta `v1.0.0` y su Release están publicados, con `app-release.apk` de 53.2 MB generado por el workflow `release-apk.yml` desde `488986e`. Esta actualización de `PLACEHOLDERS.md` es **posterior** a ese commit: no forma parte del APK publicado, y `v1.0.0` no se movió ni se recreó.
+- **Instalación (emulador `emulator-5554`):** se descargó el APK del Release y se instaló; la desinstalación previa y la instalación terminaron con `Success`.
+- **Comprobado a mano con ese APK:** abre sin la franja DEBUG, carga los cuatro gastos, «comida» muestra los dos almuerzos de 6.50 y «Todas» recupera los cuatro.
+- **Validación automática final:** `flutter analyze` sin incidencias y **223 pruebas aprobadas**.
+- **Límites que se mantienen:** el APK se firma con la clave de debug (práctica, no producción) y usa HTTP sin cifrar hacia `10.0.2.2` (backend en `:8000`, proxy del Asistente en `:3001`), solo válido para el emulador de esta práctica. Para producción harían falta una clave de firma propia en Secrets, HTTPS y la dirección real del backend.
+- **Opcionales sin activar:** Paso 10 («Acerca de») y Paso 11 (hook de formato del agente).
+- **Pendientes sin evidencia:** la comprobación manual de que la selección del filtro se conserva al recargar (Paso 7) y la captura del registro de la consola de errores (Paso 2).
 
 ## Sesión 9 — Asistente ExploraIA
 
