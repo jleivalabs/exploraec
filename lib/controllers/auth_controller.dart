@@ -33,6 +33,13 @@ class AuthController extends GetxController {
 
   bool get estaAutenticado => usuario.value != null;
 
+  /// Marca de sesión (Sesión 9): cambia cada vez que se abre o se cierra una
+  /// sesión. Quien empieza una operación larga la guarda y, al volver, la
+  /// compara: si cambió, el resultado es de otra sesión (aunque sea la misma
+  /// persona que salió y volvió a entrar) y se descarta.
+  int _marca = 0;
+  int get marcaSesion => _marca;
+
   /// Cierre de sesión en curso: una segunda llamada (por ejemplo, el menú y
   /// un 401 a la vez) espera a la misma en vez de repetir el borrado.
   Future<bool>? _cerrando;
@@ -99,6 +106,7 @@ class AuthController extends GetxController {
       tokenAsignado = true;
       final yo = await _leerUsuario();
       await _almacen.guardar(token);
+      _marca++;
       usuario.value = yo;
       avisoSesion.value = '';
       await _recordarUsuario(yo.id);
@@ -132,6 +140,7 @@ class AuthController extends GetxController {
       _api.token = guardado;
       final yo = await _leerUsuario();
       if (intento != _restauracion) return;
+      _marca++;
       usuario.value = yo;
       await _recordarUsuario(yo.id);
     } on ApiException catch (e) {
@@ -183,6 +192,7 @@ class AuthController extends GetxController {
     // Primero lo que vive en memoria, sin esperar al disco: desde aquí ninguna
     // petición lleva el token y la pantalla vuelve a «sin sesión».
     _restauracion++; // una restauración en curso ya no abrirá la sesión
+    _marca++;
     restaurando.value = false;
     _api.token = null;
     usuario.value = null;

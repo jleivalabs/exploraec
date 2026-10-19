@@ -1,6 +1,7 @@
 import 'package:get/get.dart';
 
 import '../models/gasto.dart';
+import '../models/resumen_gastos.dart';
 import '../models/usuario.dart';
 import '../repositories/gastos_repository.dart';
 import '../services/api_client.dart';
@@ -259,6 +260,10 @@ class GastosController extends GetxController {
     }
     await _recargarTrasCambio();
   }
+
+  /// Resumen por categoría del servidor (Sesión 9, Asistente). No pasa por la
+  /// caché: es lo único que viaja al proxy y debe reflejar al servidor.
+  Future<ResumenGastos> obtenerResumen() => _api.obtenerResumen();
 
   /// Borra todo lo de la persona que cierra sesión — la lista en pantalla y su
   /// caja de Hive (`GastosRepository.vaciar`, Sesión 7). Lo llama

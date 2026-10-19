@@ -1,4 +1,52 @@
-# Placeholders de esta rama (sesion-08)
+# Placeholders de esta rama (sesion-09)
+
+## Sesión 9 — Asistente ExploraIA
+
+Pestaña «Asistente» conectada a un proxy propio (`mock-server/`) que llama a Gemini. La app no lleva ninguna clave de IA, envía solo la pregunta y el resumen por categoría, y pide confirmación antes de registrar un gasto. **Este proyecto no usó** `git checkout starter/sesion-09 -- lib test pubspec.yaml PLACEHOLDERS.md mock-server`: se trajeron solo los archivos nuevos y el resto se combinó a mano, conservando la Sesión 8 (con su Paso 9 inactivo).
+
+### Estado de los pasos
+
+| Paso | Contenido | Estado |
+|---|---|---|
+| Punto de partida y 2 | `resumen_gastos.dart`, `ai_assistant_service.dart`, `assistant_screen.dart`, `mock-server/`, `sesion_09_test.dart`; quinta pestaña, traducción `asistente`, `obtenerResumen()` en servicio y controller (sin caché), parámetro `titulo` de `SinSesionView` | Hecho |
+| 3 | Contrato del proxy (`consulta` + `resumen`; responde `respuesta` y `accion`) | Hecho |
+| 4 | Preguntar: resumen del backend → proxy → respuesta | Hecho, con marca de sesión |
+| 5 | Confirmación humana antes de registrar | Hecho, con marca de sesión |
+| 6 | Errores: límite de 500 y proxy apagado | Hecho |
+| 7 | Datos mínimos: qué viaja al proxy | Hecho |
+| 8 | El proxy pide el resumen por MCP (`resumen_gastos`) y prueba de extremo a extremo | Hecho |
+| 9 (opcional) | Preguntas sugeridas (chips) | **No activado** |
+
+### Entorno de la práctica
+
+- **Proxy en el puerto 3001** (el 3000 estaba ocupado): se enciende con la variable `PORT`; la app se ejecuta con `--dart-define=LLM_BACKEND_URL=http://10.0.2.2:3001` (la dirección no está fija en el código). Para la prueba de extremo a extremo, `PROXY_URL=http://localhost:3001`; el backend sigue en `http://localhost:8000`.
+- **Gemini:** modelo `gemini-3.5-flash-lite`, con la clave solo en la variable de entorno `GEMINI_API_KEY` de la terminal del proxy; no está escrita en ningún archivo del proyecto. Sin clave, el proxy funciona en modo REGLAS con el mismo contrato.
+
+### Decisiones de integración
+
+- **Marca de sesión (`AuthController.marcaSesion`):** cambia cada vez que se abre o se cierra una sesión. El Asistente la guarda al preguntar y la comprueba después de cada espera (resumen, proxy, decisión del diálogo) y justo antes de `crear`; si cambió, descarta la respuesta, el error o la acción, aunque la misma persona haya vuelto a entrar. Al cambiar de sesión se limpia la pantalla y se cierra solo el diálogo de confirmación si sigue abierto. Mientras hay una consulta en curso no se envía otra.
+- **Crear desde el Asistente** reutiliza `GastosController.crear`: recarga la primera página y la caché; si la recarga falla, el gasto aceptado no se repite.
+- **Contraseña de `probar-e2e.js`:** además de como argumento, puede llegar en la variable temporal `E2E_CLAVE` (así no queda en el historial ni en la línea del proceso); nunca se imprime.
+- **Pruebas:** `sesion_09_test.dart` borra su carpeta temporal de Hive al terminar y usa una caja de gastos en memoria (`_RepositorioEnMemoria`, el patrón de `widget_test.dart`). Antes, una escritura real a disco iniciada dentro de `testWidgets` dejaba esperando a `Hive.close()` en `tearDownAll`.
+
+### Pruebas automáticas
+
+`flutter analyze` sin incidencias, `node --check` correcto en `mock-server.js`, `mcp-cliente.js` y `probar-e2e.js`, y `flutter test` con **206 pruebas aprobadas** (las 194 de la Sesión 8 más 12 de `sesion_09_test.dart`: servicio y modelo, Paso 4 con consultas duplicadas, respuestas y errores de una sesión anterior y 401 del proxy, y Paso 5 con confirmar, cancelar y cambio de sesión con el diálogo abierto). Sin backend real ni Gemini: servidores falsos.
+
+### Comprobado a mano
+
+- **Asistente:** consulta con respuesta correcta según los datos reales; confirmación y creación de un gasto propuesto; rechazo del backend al registrar 600 (límite de 500 por categoría); error claro con el proxy apagado y recuperación al volver a encenderlo.
+- **Datos mínimos (Paso 7):** al pasar de 4 a 7 gastos, la petición al proxy pasó de 379 a 382 bytes, siempre con cuatro categorías en el resumen.
+- **Extremo a extremo (Paso 8):** `probar-e2e.js` real con las cuatro comprobaciones correctas; resumen con total 20.25 y comida 13. Desde la app, el proxy registró «Resumen obtenido del backend por MCP (resumen_gastos)».
+
+### Límites conocidos
+
+- El proxy es una **demostración** local: en un proyecto real estaría en un servidor de la organización, con límites de uso.
+- **Respaldo previsto:** si el MCP falla (backend apagado o token caducado), el proxy usa el resumen que envió la app y lo indica en consola («MCP no disponible…»).
+- **401 del proxy:** se muestra como error del Asistente y **no** cierra la sesión global (su `Dio` no pasa por nuestros interceptores); distinguir su origen queda pendiente.
+- El resumen no tiene caché: sin conexión, el Asistente solo muestra el error.
+
+## Sesión 8
 
 Sesión 8: el cliente `http` se reemplaza por `dio` con interceptores, el token va al almacenamiento seguro (`flutter_secure_storage`), la sesión la maneja `AuthController` y se completa el CRUD de gastos. **Este proyecto no usó** `git checkout starter/sesion-08 -- lib test pubspec.yaml PLACEHOLDERS.md` (habría borrado la paginación, la caché acumulada, el aviso de copia parcial y las pruebas propias): se trajeron solo los archivos nuevos y el resto se combinó a mano.
 

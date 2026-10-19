@@ -1,4 +1,5 @@
 import '../models/gasto.dart';
+import '../models/resumen_gastos.dart';
 import 'api_client.dart';
 
 /// Llamadas HTTP de la sección Gastos — Sesión 6, ahora sobre `ApiClient`
@@ -31,6 +32,18 @@ class GastosApiService {
     final gastos = json.whereType<Map<String, dynamic>>().map(Gasto.fromJson).toList();
     final total = int.tryParse(r.headers.value('x-total-count') ?? '') ?? gastos.length;
     return (gastos: gastos, total: total);
+  }
+
+  /// GET /gastos/resumen — totales por categoría y lo que queda disponible
+  /// hasta el límite de 500. Es el único dato de gastos que sale hacia el
+  /// proxy del asistente (Sesión 9).
+  Future<ResumenGastos> obtenerResumen() async {
+    final r = await _client.get('/gastos/resumen');
+    final json = r.data;
+    if (json is! Map) {
+      throw ApiException('Respuesta inesperada del servidor al leer el resumen.');
+    }
+    return ResumenGastos.fromJson(Map<String, dynamic>.from(json));
   }
 
   /// GET /gastos/categorias — `{categorias: [...], limite_por_categoria: 500.0}`.

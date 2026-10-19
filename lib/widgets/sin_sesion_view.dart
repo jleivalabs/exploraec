@@ -9,13 +9,15 @@ import '../theme/app_theme.dart';
 /// comprueba el token guardado muestra un indicador; después, el motivo (si
 /// lo hay) y el botón para iniciar sesión.
 class SinSesionView extends StatelessWidget {
-  const SinSesionView({super.key});
+  /// Título de la barra: por defecto «Gastos»; el Asistente (Sesión 9) usa el suyo.
+  final String? titulo;
+  const SinSesionView({super.key, this.titulo});
 
   @override
   Widget build(BuildContext context) {
     final auth = Get.find<AuthController>();
     return Scaffold(
-      appBar: AppBar(title: Text('gastos'.tr)),
+      appBar: AppBar(title: Text(titulo ?? 'gastos'.tr)),
       body: Obx(() {
         if (auth.restaurando.value) {
           return const Center(child: CircularProgressIndicator());

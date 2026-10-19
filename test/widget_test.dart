@@ -1156,12 +1156,12 @@ void main() {
 
   group('Idioma con GetX (Paso 6B)', () {
     const textosEs = {
-      'barra': ['Inicio', 'Mapa', 'Favoritos', 'Gastos'],
+      'barra': ['Inicio', 'Mapa', 'Favoritos', 'Gastos', 'Asistente'],
       'menu': ['Simular: normal', 'Simular: vacío', 'Simular: error'],
       'tooltip': ['Cambiar idioma'],
     };
     const textosEn = {
-      'barra': ['Home', 'Map', 'Favorites', 'Expenses'],
+      'barra': ['Home', 'Map', 'Favorites', 'Expenses', 'Assistant'],
       'menu': ['Simulate: normal', 'Simulate: empty', 'Simulate: error'],
       'tooltip': ['Change language'],
     };
@@ -1836,8 +1836,9 @@ void main() {
           tester.widget<BottomNavigationBar>(find.byType(BottomNavigationBar));
       expect(barra.type, BottomNavigationBarType.fixed);
       expect(barra.items.map((i) => i.label).toList(),
-          ['Inicio', 'Mapa', 'Favoritos', 'Gastos']);
-      expect((barra.items.last.icon as Icon).icon, Icons.receipt_long);
+          ['Inicio', 'Mapa', 'Favoritos', 'Gastos', 'Asistente']);
+      expect((barra.items[3].icon as Icon).icon, Icons.receipt_long);
+      expect((barra.items.last.icon as Icon).icon, Icons.auto_awesome);
 
       await _irAGastos(tester);
       expect(find.byType(GastosScreen), findsOneWidget);

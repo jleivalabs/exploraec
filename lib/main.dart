@@ -6,10 +6,12 @@ import 'bindings/places_binding.dart';
 import 'controllers/auth_controller.dart';
 // Por qué: el diccionario de textos vive en su propio archivo; sin este import, `AppTranslations` no existe aquí.
 import 'i18n/app_translations.dart';
+import 'screens/assistant_screen.dart';
 import 'screens/favorites_screen.dart';
 import 'screens/gastos_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/map_screen.dart';
+import 'services/ai_assistant_service.dart';
 import 'services/api_client.dart';
 // TODO(sesion-07): OPCIONAL — descomenta la línea de abajo (Paso 6 — idioma guardado). No borres nada.
 import 'services/settings_service.dart';
@@ -36,6 +38,8 @@ Future<void> main() async {
   // seguro (`SecureTokenStorage`).
   Get.put(ApiClient(), permanent: true);
   Get.put(AuthController(), permanent: true);
+  // Sesión 9: el cliente del proxy del asistente (no lleva ninguna clave de IA).
+  Get.put(AiAssistantService(), permanent: true);
   runApp(const ExploraEcApp());
 }
 
@@ -88,7 +92,8 @@ class _RootShellState extends State<RootShell> {
         0 => const HomeScreen(),
         1 => const MapScreen(),
         2 => const FavoritesScreen(),
-        _ => const GastosScreen(),
+        3 => const GastosScreen(),
+        _ => const AssistantScreen(),
       },
       bottomNavigationBar: BottomNavigationBar(
         // Con 4 pestañas Flutter cambia por defecto al tipo `shifting`
@@ -104,6 +109,7 @@ class _RootShellState extends State<RootShell> {
           BottomNavigationBarItem(icon: const Icon(Icons.map), label: 'mapa'.tr),
           BottomNavigationBarItem(icon: const Icon(Icons.favorite), label: 'favoritos'.tr),
           BottomNavigationBarItem(icon: const Icon(Icons.receipt_long), label: 'gastos'.tr),
+          BottomNavigationBarItem(icon: const Icon(Icons.auto_awesome), label: 'asistente'.tr),
         ],
       ),
     );
