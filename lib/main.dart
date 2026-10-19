@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get/get.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
@@ -16,6 +17,7 @@ import 'services/api_client.dart';
 // TODO(sesion-07): OPCIONAL — descomenta la línea de abajo (Paso 6 — idioma guardado). No borres nada.
 import 'services/settings_service.dart';
 import 'theme/app_theme.dart';
+import 'utils/reporte_errores.dart';
 
 Future<void> main() async {
   // Hive necesita el motor de Flutter listo antes de pedirle al sistema
@@ -40,6 +42,9 @@ Future<void> main() async {
   Get.put(AuthController(), permanent: true);
   // Sesión 9: el cliente del proxy del asistente (no lleva ninguna clave de IA).
   Get.put(AiAssistantService(), permanent: true);
+  // Sesión 10: qué hacer con los errores que nadie esperaba (ver `ReporteErrores`;
+  // su bloque se activa en el Paso 2).
+  ReporteErrores.instalar();
   runApp(const ExploraEcApp());
 }
 
@@ -68,6 +73,15 @@ class ExploraEcApp extends StatelessWidget {
       // español si nunca se eligió otro).
       locale: SettingsService.idioma,
       fallbackLocale: const Locale('es', 'EC'),
+      // Sesión 10: textos propios de Flutter (licencias, selector de fecha,
+      // etc.) en el mismo idioma que la app. Los dos idiomas son los mismos
+      // que alterna `SettingsService`.
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('es', 'EC'), Locale('en', 'US')],
       initialBinding: PlacesBinding(),
       home: const RootShell(),
     );

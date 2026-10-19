@@ -46,3 +46,8 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Sesión 10 (Paso 4): secretos y configuración personal de agentes (no se comparten)
+.env
+.claude/settings.local.json
+CLAUDE.local.md
